@@ -23,31 +23,32 @@
 
   <parent>
     <groupId>org.apache.beam</groupId>
-    <artifactId>parent</artifactId>
+    <artifactId>sdks-parent</artifactId>
     <version>0.1.0-incubating-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
 
-  <artifactId>examples-parent</artifactId>
+  <artifactId>java-sdk-parent</artifactId>
 
   <packaging>pom</packaging>
 
-  <name>Apache Beam :: Examples</name>
+  <name>Apache Beam :: SDKs :: Java</name>
 
   <modules>
-    <module>java</module>
+    <module>core</module>
+    <module>maven-archetypes</module>
   </modules>
 
   <profiles>
     <profile>
-      <id>java8</id>
+      <id>java8-tests</id>
       <activation>
         <jdk>[1.8,)</jdk>
       </activation>
       <modules>
-        <module>java8</module>
+        <module>java8tests</module>
       </modules>
-      </profile>
+    </profile>
   </profiles>
 
 </project>

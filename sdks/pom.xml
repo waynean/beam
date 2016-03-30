@@ -28,26 +28,14 @@
     <relativePath>../pom.xml</relativePath>
   </parent>
 
-  <artifactId>examples-parent</artifactId>
+  <artifactId>sdks-parent</artifactId>
 
   <packaging>pom</packaging>
 
-  <name>Apache Beam :: Examples</name>
+  <name>Apache Beam :: SDKs</name>
 
   <modules>
     <module>java</module>
   </modules>
-
-  <profiles>
-    <profile>
-      <id>java8</id>
-      <activation>
-        <jdk>[1.8,)</jdk>
-      </activation>
-      <modules>
-        <module>java8</module>
-      </modules>
-      </profile>
-  </profiles>
 
 </project>
