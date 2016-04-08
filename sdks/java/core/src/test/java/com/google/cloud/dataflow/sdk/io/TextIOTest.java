@@ -37,14 +37,11 @@ import com.google.cloud.dataflow.sdk.io.TextIO.TextSource;
 import com.google.cloud.dataflow.sdk.options.PipelineOptionsFactory;
 import com.google.cloud.dataflow.sdk.testing.DataflowAssert;
 import com.google.cloud.dataflow.sdk.testing.SourceTestUtils;
-import com.google.cloud.dataflow.sdk.testing.TestDataflowPipelineOptions;
 import com.google.cloud.dataflow.sdk.testing.TestPipeline;
 import com.google.cloud.dataflow.sdk.transforms.Create;
 import com.google.cloud.dataflow.sdk.transforms.PTransform;
 import com.google.cloud.dataflow.sdk.util.CoderUtils;
-import com.google.cloud.dataflow.sdk.util.GcsUtil;
-import com.google.cloud.dataflow.sdk.util.TestCredential;
-import com.google.cloud.dataflow.sdk.util.gcsfs.GcsPath;
+import com.google.cloud.dataflow.sdk.util.IOChannelUtils;
 import com.google.cloud.dataflow.sdk.values.PCollection;
 import com.google.cloud.dataflow.sdk.values.PDone;
 import com.google.common.collect.ImmutableList;
@@ -55,9 +52,6 @@ import org.junit.rules.ExpectedException;
 import org.junit.rules.TemporaryFolder;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
-import org.mockito.Mockito;
-import org.mockito.invocation.InvocationOnMock;
-import org.mockito.stubbing.Answer;
 
 import java.io.BufferedReader;
 import java.io.File;
@@ -65,11 +59,8 @@ import java.io.FileOutputStream;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.PrintStream;
-import java.nio.channels.FileChannel;
-import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
-import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -83,42 +74,6 @@ import java.util.zip.GZIPOutputStream;
 public class TextIOTest {
   @Rule public TemporaryFolder tmpFolder = new TemporaryFolder();
   @Rule public ExpectedException expectedException = ExpectedException.none();
-
-  private GcsUtil buildMockGcsUtil() throws IOException {
-    GcsUtil mockGcsUtil = Mockito.mock(GcsUtil.class);
-
-    // Any request to open gets a new bogus channel
-    Mockito
-        .when(mockGcsUtil.open(Mockito.any(GcsPath.class)))
-        .then(new Answer<SeekableByteChannel>() {
-          @Override
-          public SeekableByteChannel answer(InvocationOnMock invocation) throws Throwable {
-            return FileChannel.open(
-                Files.createTempFile("channel-", ".tmp"),
-                StandardOpenOption.CREATE, StandardOpenOption.DELETE_ON_CLOSE);
-          }
-        });
-
-    // Any request for expansion returns a list containing the original GcsPath
-    // This is required to pass validation that occurs in TextIO during apply()
-    Mockito
-        .when(mockGcsUtil.expand(Mockito.any(GcsPath.class)))
-        .then(new Answer<List<GcsPath>>() {
-          @Override
-          public List<GcsPath> answer(InvocationOnMock invocation) throws Throwable {
-            return ImmutableList.of((GcsPath) invocation.getArguments()[0]);
-          }
-        });
-
-    return mockGcsUtil;
-  }
-
-  private TestDataflowPipelineOptions buildTestPipelineOptions() {
-    TestDataflowPipelineOptions options =
-        PipelineOptionsFactory.as(TestDataflowPipelineOptions.class);
-    options.setGcpCredential(new TestCredential());
-    return options;
-  }
 
   <T> void runTestRead(T[] expected, Coder<T> coder) throws Exception {
     File tmpFile = tmpFolder.newFile("file.txt");
@@ -199,36 +154,57 @@ public class TextIOTest {
   }
 
   <T> void runTestWrite(T[] elems, Coder<T> coder) throws Exception {
-    File tmpFile = tmpFolder.newFile("file.txt");
-    String filename = tmpFile.getPath();
+    runTestWrite(elems, coder, 1);
+  }
+
+  <T> void runTestWrite(T[] elems, Coder<T> coder, int numShards) throws Exception {
+    String filename = tmpFolder.newFile("file.txt").getPath();
 
     Pipeline p = TestPipeline.create();
 
-    PCollection<T> input =
-        p.apply(Create.of(Arrays.asList(elems)).withCoder(coder));
+    PCollection<T> input = p.apply(Create.of(Arrays.asList(elems)).withCoder(coder));
 
     TextIO.Write.Bound<T> write;
     if (coder.equals(StringUtf8Coder.of())) {
-      TextIO.Write.Bound<String> writeStrings =
-          TextIO.Write.to(filename).withoutSharding();
+      TextIO.Write.Bound<String> writeStrings = TextIO.Write.to(filename);
       // T==String
       write = (TextIO.Write.Bound<T>) writeStrings;
     } else {
-      write = TextIO.Write.to(filename).withCoder(coder).withoutSharding();
+      write = TextIO.Write.to(filename).withCoder(coder);
+    }
+    if (numShards == 1) {
+      write = write.withoutSharding();
+    } else {
+      write = write.withNumShards(numShards).withShardNameTemplate(ShardNameTemplate.INDEX_OF_MAX);
     }
 
     input.apply(write);
 
     p.run();
 
+    List<File> expectedFiles = new ArrayList<>();
+    if (numShards == 1) {
+      expectedFiles.add(new File(filename));
+    } else {
+      for (int i = 0; i < numShards; i++) {
+        expectedFiles.add(
+            new File(
+                tmpFolder.getRoot(),
+                IOChannelUtils.constructName(
+                    "file.txt", ShardNameTemplate.INDEX_OF_MAX, "", i, numShards)));
+      }
+    }
+
     List<String> actual = new ArrayList<>();
-    try (BufferedReader reader = new BufferedReader(new FileReader(tmpFile))) {
-      for (;;) {
-        String line = reader.readLine();
-        if (line == null) {
-          break;
+    for (File tmpFile : expectedFiles) {
+      try (BufferedReader reader = new BufferedReader(new FileReader(tmpFile))) {
+        for (;;) {
+          String line = reader.readLine();
+          if (line == null) {
+            break;
+          }
+          actual.add(line);
         }
-        actual.add(line);
       }
     }
 
@@ -240,8 +216,7 @@ public class TextIOTest {
       expected[i] = line;
     }
 
-    assertThat(actual,
-               containsInAnyOrder(expected));
+    assertThat(actual, containsInAnyOrder(expected));
   }
 
   @Test
@@ -286,6 +261,11 @@ public class TextIOTest {
   }
 
   @Test
+  public void testShardedWrite() throws Exception {
+    runTestWrite(LINES_ARRAY, StringUtf8Coder.of(), 5);
+  }
+
+  @Test
   public void testUnsupportedFilePattern() throws IOException {
     File outFolder = tmpFolder.newFolder();
     // Windows doesn't like resolving paths with * in them.
@@ -300,39 +280,6 @@ public class TextIOTest {
     expectedException.expect(IllegalArgumentException.class);
     expectedException.expectMessage("Output name components are not allowed to contain");
     input.apply(TextIO.Write.to(filename));
-  }
-
-  /**
-   * This tests a few corner cases that should not crash.
-   */
-  @Test
-  public void testGoodWildcards() throws Exception {
-    TestDataflowPipelineOptions options = buildTestPipelineOptions();
-    options.setGcsUtil(buildMockGcsUtil());
-
-    Pipeline pipeline = Pipeline.create(options);
-
-    applyRead(pipeline, "gs://bucket/foo");
-    applyRead(pipeline, "gs://bucket/foo/");
-    applyRead(pipeline, "gs://bucket/foo/*");
-    applyRead(pipeline, "gs://bucket/foo/?");
-    applyRead(pipeline, "gs://bucket/foo/[0-9]");
-    applyRead(pipeline, "gs://bucket/foo/*baz*");
-    applyRead(pipeline, "gs://bucket/foo/*baz?");
-    applyRead(pipeline, "gs://bucket/foo/[0-9]baz?");
-    applyRead(pipeline, "gs://bucket/foo/baz/*");
-    applyRead(pipeline, "gs://bucket/foo/baz/*wonka*");
-    applyRead(pipeline, "gs://bucket/foo/*baz/wonka*");
-    applyRead(pipeline, "gs://bucket/foo*/baz");
-    applyRead(pipeline, "gs://bucket/foo?/baz");
-    applyRead(pipeline, "gs://bucket/foo[0-9]/baz");
-
-    // Check that running doesn't fail.
-    pipeline.run();
-  }
-
-  private void applyRead(Pipeline pipeline, String path) {
-    pipeline.apply("Read(" + path + ")", TextIO.Read.from(path));
   }
 
   /**
