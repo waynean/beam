@@ -63,6 +63,7 @@ import org.apache.beam.runners.spark.translation.WindowingHelpers;
 
 import org.apache.spark.api.java.JavaRDD;
 import org.apache.spark.api.java.function.Function;
+import org.apache.spark.api.java.function.VoidFunction;
 import org.apache.spark.streaming.Duration;
 import org.apache.spark.streaming.Durations;
 import org.apache.spark.streaming.api.java.JavaDStream;
@@ -136,7 +137,7 @@ public final class StreamingTransformTranslator {
           // fake create as an input
           // creates a stream with a single batch containing a single null element
           // to invoke following transformations once
-          // to support DataflowAssert
+          // to support PAssert
           sec.setDStreamFromQueue(transform,
               Collections.<Iterable<Void>>singletonList(Collections.singletonList((Void) null)),
               (Coder<Void>) coder);
@@ -195,7 +196,7 @@ public final class StreamingTransformTranslator {
               .transform(new RDDTransform<>(sec, rddEvaluator, transform)));
         } else {
           // if the transformation requires direct access to RDD (not in stream)
-          // this is used for "fake" transformations like with DataflowAssert
+          // this is used for "fake" transformations like with PAssert
           rddEvaluator.evaluate(transform, context);
         }
       }
@@ -274,7 +275,7 @@ public final class StreamingTransformTranslator {
    * @param <PT> PTransform type
    */
   private static final class RDDOutputOperator<PT extends PTransform<?, ?>>
-      implements Function<JavaRDD<WindowedValue<Object>>, Void> {
+      implements VoidFunction<JavaRDD<WindowedValue<Object>>> {
 
     private final StreamingEvaluationContext context;
     private final AppliedPTransform<?, ?, ?> appliedPTransform;
@@ -292,13 +293,12 @@ public final class StreamingTransformTranslator {
 
     @Override
     @SuppressWarnings("unchecked")
-    public Void call(JavaRDD<WindowedValue<Object>> rdd) throws Exception {
+    public void call(JavaRDD<WindowedValue<Object>> rdd) throws Exception {
       AppliedPTransform<?, ?, ?> existingAPT = context.getCurrentTransform();
       context.setCurrentTransform(appliedPTransform);
       context.setInputRDD(transform, rdd);
       rddEvaluator.evaluate(transform, context);
       context.setCurrentTransform(existingAPT);
-      return null;
     }
   }
 

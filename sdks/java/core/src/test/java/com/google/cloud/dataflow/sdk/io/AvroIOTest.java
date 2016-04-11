@@ -27,7 +27,7 @@ import com.google.cloud.dataflow.sdk.coders.AvroCoder;
 import com.google.cloud.dataflow.sdk.coders.DefaultCoder;
 import com.google.cloud.dataflow.sdk.io.AvroIO.Write.Bound;
 import com.google.cloud.dataflow.sdk.runners.DirectPipeline;
-import com.google.cloud.dataflow.sdk.testing.DataflowAssert;
+import com.google.cloud.dataflow.sdk.testing.PAssert;
 import com.google.cloud.dataflow.sdk.testing.TestPipeline;
 import com.google.cloud.dataflow.sdk.transforms.Create;
 import com.google.cloud.dataflow.sdk.util.IOChannelUtils;
@@ -130,7 +130,7 @@ public class AvroIOTest {
     PCollection<GenericClass> input = p
         .apply(AvroIO.Read.from(outputFile.getAbsolutePath()).withSchema(GenericClass.class));
 
-    DataflowAssert.that(input).containsInAnyOrder(values);
+    PAssert.that(input).containsInAnyOrder(values);
     p.run();
   }
 
@@ -195,7 +195,7 @@ public class AvroIOTest {
     PCollection<GenericClassV2> input = p
         .apply(AvroIO.Read.from(outputFile.getAbsolutePath()).withSchema(GenericClassV2.class));
 
-    DataflowAssert.that(input).containsInAnyOrder(expected);
+    PAssert.that(input).containsInAnyOrder(expected);
     p.run();
   }
 
@@ -206,35 +206,35 @@ public class AvroIOTest {
     TestPipeline p = TestPipeline.create();
     Bound<String> write = AvroIO.Write.to(outputFilePrefix).withSchema(String.class);
     if (numShards > 1) {
-      write = write.withNumShards(numShards).withShardNameTemplate(ShardNameTemplate.INDEX_OF_MAX);
+      write = write.withNumShards(numShards);
     } else {
       write = write.withoutSharding();
     }
     p.apply(Create.<String>of(expectedElements)).apply(write);
     p.run();
 
+    String shardNameTemplate = write.getShardNameTemplate();
+
+    assertTestOutputs(expectedElements, numShards, outputFilePrefix, shardNameTemplate);
+  }
+
+  public static void assertTestOutputs(
+      String[] expectedElements, int numShards, String outputFilePrefix, String shardNameTemplate)
+      throws IOException {
     // Validate that the data written matches the expected elements in the expected order
     List<File> expectedFiles = new ArrayList<>();
-    if (numShards == 1) {
-      expectedFiles.add(baseOutputFile);
-    } else {
-      for (int i = 0; i < numShards; i++) {
-        expectedFiles.add(
-            new File(
-                IOChannelUtils.constructName(
-                    outputFilePrefix,
-                    ShardNameTemplate.INDEX_OF_MAX,
-                    "" /* no suffix */,
-                    i,
-                    numShards)));
-      }
+    for (int i = 0; i < numShards; i++) {
+      expectedFiles.add(
+          new File(
+              IOChannelUtils.constructName(
+                  outputFilePrefix, shardNameTemplate, "" /* no suffix */, i, numShards)));
     }
 
     List<String> actualElements = new ArrayList<>();
     for (File outputFile : expectedFiles) {
       assertTrue("Expected output file " + outputFile.getName(), outputFile.exists());
       try (DataFileReader<String> reader =
-              new DataFileReader<>(outputFile, AvroCoder.of(String.class).createDatumReader())) {
+          new DataFileReader<>(outputFile, AvroCoder.of(String.class).createDatumReader())) {
         Iterators.addAll(actualElements, reader);
       }
     }
