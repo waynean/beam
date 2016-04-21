@@ -214,9 +214,9 @@ public class DataflowPipelineRunner extends PipelineRunner<DataflowPipelineJob> 
   // Default Docker container images that execute Dataflow worker harness, residing in Google
   // Container Registry, separately for Batch and Streaming.
   public static final String BATCH_WORKER_HARNESS_CONTAINER_IMAGE
-      = "dataflow.gcr.io/v1beta3/java-batch:1.5.1";
+      = "dataflow.gcr.io/v1beta3/beam-java-batch:beam-master-20160420";
   public static final String STREAMING_WORKER_HARNESS_CONTAINER_IMAGE
-      = "dataflow.gcr.io/v1beta3/java-streaming:1.5.1";
+      = "dataflow.gcr.io/v1beta3/beam-java-streaming:beam-master-20160420";
 
   // The limit of CreateJob request size.
   private static final int CREATE_JOB_REQUEST_LIMIT_BYTES = 10 * 1024 * 1024;
@@ -560,7 +560,7 @@ public class DataflowPipelineRunner extends PipelineRunner<DataflowPipelineJob> 
     }
 
     String jobIdToUpdate = null;
-    if (options.getUpdate()) {
+    if (options.isUpdate()) {
       jobIdToUpdate = getJobIdFromName(options.getJobName());
       newJob.setTransformNameMapping(options.getTransformNameMapping());
       newJob.setReplaceJobId(jobIdToUpdate);
@@ -612,7 +612,7 @@ public class DataflowPipelineRunner extends PipelineRunner<DataflowPipelineJob> 
     if (jobResult.getClientRequestId() != null && !jobResult.getClientRequestId().isEmpty()
         && !jobResult.getClientRequestId().equals(requestId)) {
       // If updating a job.
-      if (options.getUpdate()) {
+      if (options.isUpdate()) {
         throw new DataflowJobAlreadyUpdatedException(dataflowPipelineJob,
             String.format("The job named %s with id: %s has already been updated into job id: %s "
                 + "and cannot be updated again.",
