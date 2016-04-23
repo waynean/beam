@@ -22,6 +22,7 @@ import org.apache.beam.sdk.options.BlockingDataflowPipelineOptions;
 /**
  * A set of options used to configure the {@link TestPipeline}.
  */
-public interface TestDataflowPipelineOptions extends BlockingDataflowPipelineOptions {
+public interface TestDataflowPipelineOptions extends TestPipelineOptions,
+       BlockingDataflowPipelineOptions {
 
 }

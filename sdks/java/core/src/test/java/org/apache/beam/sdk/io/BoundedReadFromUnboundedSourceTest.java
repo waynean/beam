@@ -17,6 +17,7 @@
  */
 package org.apache.beam.sdk.io;
 
+import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.includes;
 import static org.hamcrest.Matchers.containsInAnyOrder;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
@@ -29,6 +30,7 @@ import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.SerializableFunction;
+import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 
@@ -38,13 +40,14 @@ import org.junit.experimental.categories.Category;
 import org.junit.runner.RunWith;
 import org.junit.runners.JUnit4;
 
+import java.io.Serializable;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
 /** Unit tests for {@link BoundedReadFromUnboundedSource}. */
 @RunWith(JUnit4.class)
-public class BoundedReadFromUnboundedSourceTest {
+public class BoundedReadFromUnboundedSourceTest implements Serializable{
   private static final int NUM_RECORDS = 100;
   private static List<Integer> finalizeTracker = null;
 
@@ -66,6 +69,19 @@ public class BoundedReadFromUnboundedSourceTest {
     test(false, true);
   }
 
+  @Test
+  public void testForwardsDisplayData() {
+    TestCountingSource src = new TestCountingSource(1234) {
+      @Override
+      public void populateDisplayData(DisplayData.Builder builder) {
+        builder.add("foo", "bar");
+      }
+    };
+
+    BoundedReadFromUnboundedSource<KV<Integer, Integer>> read = Read.from(src).withMaxNumRecords(5);
+    assertThat(DisplayData.from(read), includes(src));
+  }
+
   private static class Checker
       implements SerializableFunction<Iterable<KV<Integer, Integer>>, Void> {
     private final boolean dedup;
@@ -84,7 +100,7 @@ public class BoundedReadFromUnboundedSourceTest {
         values.add(kv.getValue());
       }
       if (timeBound) {
-        assertTrue(values.size() > 2);
+        assertTrue(values.size() >= 1);
       } else if (dedup) {
         // Verify that at least some data came through.  The chance of 90% of the input
         // being duplicates is essentially zero.

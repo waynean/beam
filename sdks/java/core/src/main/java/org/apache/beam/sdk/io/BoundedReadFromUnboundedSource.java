@@ -25,6 +25,7 @@ import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.RemoveDuplicates;
 import org.apache.beam.sdk.transforms.SerializableFunction;
+import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.util.IntervalBoundedExponentialBackOff;
 import org.apache.beam.sdk.util.ValueWithRecordId;
 import org.apache.beam.sdk.values.PCollection;
@@ -106,6 +107,16 @@ class BoundedReadFromUnboundedSource<T> extends PTransform<PInput, PCollection<T
   @Override
   public String getKindString() {
     return "Read(" + approximateSimpleName(source.getClass()) + ")";
+  }
+
+  @Override
+  public void populateDisplayData(DisplayData.Builder builder) {
+    // We explicitly do not register base-class data, instead we use the delegate inner source.
+    builder
+        .add("source", source.getClass())
+        .addIfNotDefault("maxRecords", maxNumRecords, Long.MAX_VALUE)
+        .addIfNotNull("maxReadTime", maxReadTime)
+        .include(source);
   }
 
   private static class UnboundedToBoundedSourceAdapter<T>
@@ -228,7 +239,7 @@ class BoundedReadFromUnboundedSource<T> extends PTransform<PInput, PCollection<T
 
       private boolean advanceWithBackoff() throws IOException {
         // Try reading from the source with exponential backoff
-        BackOff backoff = new IntervalBoundedExponentialBackOff(10000, 10);
+        BackOff backoff = new IntervalBoundedExponentialBackOff(10000L, 10L);
         long nextSleep = backoff.nextBackOffMillis();
         while (nextSleep != BackOff.STOP) {
           if (endTime != null && Instant.now().isAfter(endTime)) {

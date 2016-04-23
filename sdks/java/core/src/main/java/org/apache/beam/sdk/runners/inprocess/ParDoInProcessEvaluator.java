@@ -54,7 +54,7 @@ class ParDoInProcessEvaluator<T> implements TransformEvaluator<T> {
         evaluationContext.getExecutionContext(application, inputBundle.getKey());
     String stepName = evaluationContext.getStepName(application);
     InProcessStepContext stepContext =
-        executionContext.getOrCreateStepContext(stepName, stepName, null);
+        executionContext.getOrCreateStepContext(stepName, stepName);
 
     CounterSet counters = evaluationContext.createCounterSet();
 
@@ -77,7 +77,11 @@ class ParDoInProcessEvaluator<T> implements TransformEvaluator<T> {
             counters.getAddCounterMutator(),
             application.getInput().getWindowingStrategy());
 
-    runner.startBundle();
+    try {
+      runner.startBundle();
+    } catch (Exception e) {
+      throw UserCodeException.wrap(e);
+    }
 
     return new ParDoInProcessEvaluator<>(
         runner, application, counters, outputBundles.values(), stepContext);

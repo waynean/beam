@@ -204,8 +204,9 @@ public class DataflowPipelineTranslatorTest implements Serializable {
     settings.put("numberOfWorkerHarnessThreads", 0);
     settings.put("experiments", null);
 
-    assertEquals(ImmutableMap.of("options", settings),
-        job.getEnvironment().getSdkPipelineOptions());
+    Map<String, Object> sdkPipelineOptions = job.getEnvironment().getSdkPipelineOptions();
+    assertThat(sdkPipelineOptions, hasKey("options"));
+    assertEquals(settings, sdkPipelineOptions.get("options"));
   }
 
   @Test
@@ -751,7 +752,7 @@ public class DataflowPipelineTranslatorTest implements Serializable {
     assertEquals(2, steps.size());
 
     Step createStep = steps.get(0);
-    assertEquals("CreateCollection", createStep.getKind());
+    assertEquals("ParallelRead", createStep.getKind());
 
     Step collectionToSingletonStep = steps.get(1);
     assertEquals("CollectionToSingleton", collectionToSingletonStep.getKind());
@@ -783,7 +784,7 @@ public class DataflowPipelineTranslatorTest implements Serializable {
     assertEquals(2, steps.size());
 
     Step createStep = steps.get(0);
-    assertEquals("CreateCollection", createStep.getKind());
+    assertEquals("ParallelRead", createStep.getKind());
 
     Step collectionToSingletonStep = steps.get(1);
     assertEquals("CollectionToSingleton", collectionToSingletonStep.getKind());

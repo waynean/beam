@@ -89,7 +89,6 @@ import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.util.CoderUtils;
-import org.apache.beam.sdk.util.DataflowReleaseInfo;
 import org.apache.beam.sdk.util.DataflowTransport;
 import org.apache.beam.sdk.util.IOChannelUtils;
 import org.apache.beam.sdk.util.InstanceBuilder;
@@ -97,6 +96,7 @@ import org.apache.beam.sdk.util.MonitoringUtil;
 import org.apache.beam.sdk.util.PCollectionViews;
 import org.apache.beam.sdk.util.PathValidator;
 import org.apache.beam.sdk.util.PropertyNames;
+import org.apache.beam.sdk.util.ReleaseInfo;
 import org.apache.beam.sdk.util.Reshuffle;
 import org.apache.beam.sdk.util.SystemDoFnInternal;
 import org.apache.beam.sdk.util.ValueWithRecordId;
@@ -214,9 +214,9 @@ public class DataflowPipelineRunner extends PipelineRunner<DataflowPipelineJob> 
   // Default Docker container images that execute Dataflow worker harness, residing in Google
   // Container Registry, separately for Batch and Streaming.
   public static final String BATCH_WORKER_HARNESS_CONTAINER_IMAGE
-      = "dataflow.gcr.io/v1beta3/beam-java-batch:beam-master-20160420";
+      = "dataflow.gcr.io/v1beta3/beam-java-batch:beam-master-20160422";
   public static final String STREAMING_WORKER_HARNESS_CONTAINER_IMAGE
-      = "dataflow.gcr.io/v1beta3/beam-java-streaming:beam-master-20160420";
+      = "dataflow.gcr.io/v1beta3/beam-java-streaming:beam-master-20160422";
 
   // The limit of CreateJob request size.
   private static final int CREATE_JOB_REQUEST_LIMIT_BYTES = 10 * 1024 * 1024;
@@ -286,13 +286,25 @@ public class DataflowPipelineRunner extends PipelineRunner<DataflowPipelineJob> 
       LOG.debug("Classpath elements: {}", dataflowOptions.getFilesToStage());
     }
 
-    // Verify jobName according to service requirements.
-    String jobName = dataflowOptions.getJobName().toLowerCase();
-    Preconditions.checkArgument(
+    // Verify jobName according to service requirements, truncating converting to lowercase if
+    // necessary.
+    String jobName =
+        dataflowOptions
+            .getJobName()
+            .toLowerCase();
+    checkArgument(
         jobName.matches("[a-z]([-a-z0-9]*[a-z0-9])?"),
         "JobName invalid; the name must consist of only the characters "
             + "[-a-z0-9], starting with a letter and ending with a letter "
             + "or number");
+    if (!jobName.equals(dataflowOptions.getJobName())) {
+      LOG.info(
+          "PipelineOptions.jobName did not match the service requirements. "
+              + "Using {} instead of {}.",
+          jobName,
+          dataflowOptions.getJobName());
+    }
+    dataflowOptions.setJobName(jobName);
 
     // Verify project
     String project = dataflowOptions.getProject();
@@ -507,10 +519,10 @@ public class DataflowPipelineRunner extends PipelineRunner<DataflowPipelineJob> 
     Job newJob = jobSpecification.getJob();
     newJob.setClientRequestId(requestId);
 
-    String version = DataflowReleaseInfo.getReleaseInfo().getVersion();
+    String version = ReleaseInfo.getReleaseInfo().getVersion();
     System.out.println("Dataflow SDK version: " + version);
 
-    newJob.getEnvironment().setUserAgent(DataflowReleaseInfo.getReleaseInfo());
+    newJob.getEnvironment().setUserAgent(ReleaseInfo.getReleaseInfo());
     // The Dataflow Service may write to the temporary directory directly, so
     // must be verified.
     if (!Strings.isNullOrEmpty(options.getTempLocation())) {

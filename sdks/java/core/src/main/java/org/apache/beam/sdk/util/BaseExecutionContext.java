@@ -19,7 +19,6 @@ package org.apache.beam.sdk.util;
 
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
-import org.apache.beam.sdk.util.common.worker.StateSampler;
 import org.apache.beam.sdk.util.state.StateInternals;
 import org.apache.beam.sdk.values.TupleTag;
 
@@ -37,7 +36,7 @@ import java.util.Map;
  * be cached for the lifetime of this {@link ExecutionContext}.
  *
  * <p>BaseExecutionContext is generic to allow implementing subclasses to return a concrete subclass
- * of {@link StepContext} from {@link #getOrCreateStepContext(String, String, StateSampler)} and
+ * of {@link StepContext} from {@link #getOrCreateStepContext(String, String)} and
  * {@link #getAllStepContexts()} without forcing each subclass to override the method, e.g.
  * <pre>
  * @Override
@@ -47,8 +46,8 @@ import java.util.Map;
  * </pre>
  *
  * <p>When a subclass of {@code BaseExecutionContext} has been downcast, the return types of
- * {@link #createStepContext(String, String, StateSampler)},
- * {@link #getOrCreateStepContext(String, String, StateSampler}, and {@link #getAllStepContexts()}
+ * {@link #createStepContext(String, String)},
+ * {@link #getOrCreateStepContext(String, String)}, and {@link #getAllStepContexts()}
  * will be appropriately specialized.
  */
 public abstract class BaseExecutionContext<T extends ExecutionContext.StepContext>
@@ -60,21 +59,41 @@ public abstract class BaseExecutionContext<T extends ExecutionContext.StepContex
    * Implementations should override this to create the specific type
    * of {@link StepContext} they need.
    */
-  protected abstract T createStepContext(
-      String stepName, String transformName, StateSampler stateSampler);
-
+  protected abstract T createStepContext(String stepName, String transformName);
 
   /**
    * Returns the {@link StepContext} associated with the given step.
    */
   @Override
-  public T getOrCreateStepContext(
-      String stepName, String transformName, StateSampler stateSampler) {
+  public T getOrCreateStepContext(String stepName, String transformName) {
+    final String finalStepName = stepName;
+    final String finalTransformName = transformName;
+    return getOrCreateStepContext(
+        stepName,
+        new CreateStepContextFunction<T>() {
+          @Override
+          public T create() {
+            return createStepContext(finalStepName, finalTransformName);
+          }
+        });
+  }
+
+  /**
+   * Factory method interface to create an execution context if none exists during
+   * {@link #getOrCreateStepContext(String, CreateStepContextFunction)}.
+   */
+  protected interface CreateStepContextFunction<T extends ExecutionContext.StepContext> {
+    T create();
+  }
+
+  protected final T getOrCreateStepContext(String stepName,
+      CreateStepContextFunction<T> createContextFunc) {
     T context = cachedStepContexts.get(stepName);
     if (context == null) {
-      context = createStepContext(stepName, transformName, stateSampler);
+      context = createContextFunc.create();
       cachedStepContexts.put(stepName, context);
     }
+
     return context;
   }
 
