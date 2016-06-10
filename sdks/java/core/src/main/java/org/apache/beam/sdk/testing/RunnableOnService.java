@@ -31,4 +31,4 @@ package org.apache.beam.sdk.testing;
  *     }
  * </code></pre>
  */
-public interface RunnableOnService {}
+public interface RunnableOnService extends NeedsRunner {}

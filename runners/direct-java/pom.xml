@@ -15,22 +15,20 @@
     See the License for the specific language governing permissions and
     limitations under the License.
 -->
-<project xmlns="http://maven.apache.org/POM/4.0.0"
-         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
-         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
+<project xmlns="http://maven.apache.org/POM/4.0.0" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 http://maven.apache.org/xsd/maven-4.0.0.xsd">
 
   <modelVersion>4.0.0</modelVersion>
 
   <parent>
-    <groupId>org.apache.beam.runners</groupId>
-    <artifactId>parent</artifactId>
-    <version>0.1.0-incubating-SNAPSHOT</version>
+    <groupId>org.apache.beam</groupId>
+    <artifactId>beam-runners-parent</artifactId>
+    <version>0.2.0-incubating-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
 
-  <artifactId>direct</artifactId>
+  <artifactId>beam-runners-direct-java</artifactId>
 
-  <name>Apache Beam :: Runners :: Direct</name>
+  <name>Apache Beam :: Runners :: Direct Java</name>
 
   <packaging>jar</packaging>
 
@@ -88,11 +86,11 @@
               <goal>test</goal>
             </goals>
             <configuration>
-              <groups>org.apache.beam.sdk.testing.RunnableOnService</groups>
+              <groups>org.apache.beam.sdk.testing.NeedsRunner</groups>
               <parallel>none</parallel>
               <failIfNoTests>true</failIfNoTests>
               <dependenciesToScan>
-                <dependency>org.apache.beam:java-sdk-all</dependency>
+                <dependency>org.apache.beam:beam-sdks-java-core</dependency>
               </dependenciesToScan>
               <systemPropertyVariables>
                 <beamTestPipelineOptions>
@@ -203,6 +201,10 @@
                   <pattern>com.google.common</pattern>
                   <shadedPattern>org.apache.beam.runners.direct.repackaged.com.google.common</shadedPattern>
                 </relocation>
+                <relocation>
+                  <pattern>com.google.thirdparty</pattern>
+                  <shadedPattern>org.apache.beam.runners.direct.repackaged.com.google.thirdparty</shadedPattern>
+                </relocation>
               </relocations>
             </configuration>
           </execution>
@@ -249,12 +251,12 @@
   <dependencies>
     <dependency>
       <groupId>org.apache.beam</groupId>
-      <artifactId>java-sdk-all</artifactId>
+      <artifactId>beam-sdks-java-core</artifactId>
     </dependency>
 
     <dependency>
-      <groupId>org.apache.beam.runners</groupId>
-      <artifactId>core</artifactId>
+      <groupId>org.apache.beam</groupId>
+      <artifactId>beam-runners-core-java</artifactId>
     </dependency>
 
     <dependency>
@@ -334,9 +336,32 @@
 
     <dependency>
       <groupId>org.apache.beam</groupId>
-      <artifactId>java-sdk-all</artifactId>
+      <artifactId>beam-sdks-java-core</artifactId>
       <type>test-jar</type>
       <scope>test</scope>
     </dependency>
+
+    <!-- required for XMLSourceTest -->
+    <dependency>
+      <groupId>org.codehaus.woodstox</groupId>
+      <artifactId>stax2-api</artifactId>
+      <version>${stax2.version}</version>
+      <scope>test</scope>
+    </dependency>
+
+    <dependency>
+      <groupId>org.codehaus.woodstox</groupId>
+      <artifactId>woodstox-core-asl</artifactId>
+      <version>${woodstox.version}</version>
+      <exclusions>
+        <!-- javax.xml.stream:stax-api is included in JDK 1.6+ -->
+        <exclusion>
+          <groupId>javax.xml.stream</groupId>
+          <artifactId>stax-api</artifactId>
+        </exclusion>
+      </exclusions>
+      <scope>test</scope>
+    </dependency>
+
   </dependencies>
 </project>

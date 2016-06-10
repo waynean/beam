@@ -122,6 +122,7 @@ public class CoGroupByKeyTest implements Serializable {
   }
 
   @Test
+  @Category(RunnableOnService.class)
   public void testCoGroupByKeyGetOnly() {
     final TupleTag<String> tag1 = new TupleTag<>();
     final TupleTag<String> tag2 = new TupleTag<>();
@@ -260,6 +261,7 @@ public class CoGroupByKeyTest implements Serializable {
   }
 
   @Test
+  @Category(RunnableOnService.class)
   public void testCoGroupByKey() {
     final TupleTag<String> namesTag = new TupleTag<>();
     final TupleTag<String> addressesTag = new TupleTag<>();
@@ -404,7 +406,7 @@ public class CoGroupByKeyTest implements Serializable {
    */
   @SuppressWarnings("unchecked")
   @Test
-  public void testConsumingDoFn() {
+  public void testConsumingDoFn() throws Exception {
     TupleTag<String> purchasesTag = new TupleTag<>();
     TupleTag<String> addressesTag = new TupleTag<>();
     TupleTag<String> namesTag = new TupleTag<>();

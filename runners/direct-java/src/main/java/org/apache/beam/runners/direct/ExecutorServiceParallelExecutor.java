@@ -200,11 +200,16 @@ final class ExecutorServiceParallelExecutor implements InProcessExecutor {
   public void awaitCompletion() throws Throwable {
     VisibleExecutorUpdate update;
     do {
-      update = visibleUpdates.take();
-      if (update.throwable.isPresent()) {
+      // Get an update; don't block forever if another thread has handled it
+      update = visibleUpdates.poll(2L, TimeUnit.SECONDS);
+      if (update == null && executorService.isShutdown()) {
+        // there are no updates to process and no updates will ever be published because the
+        // executor is shutdown
+        return;
+      } else if (update != null && update.throwable.isPresent()) {
         throw update.throwable.get();
       }
-    } while (!update.isDone());
+    } while (update == null || !update.isDone());
     executorService.shutdown();
   }
 
@@ -346,6 +351,8 @@ final class ExecutorServiceParallelExecutor implements InProcessExecutor {
         evaluationContext.getPipelineOptions().getAppName(),
         ExecutorServiceParallelExecutor.class.getSimpleName());
 
+    private boolean exceptionThrown = false;
+
     @Override
     public void run() {
       String oldName = Thread.currentThread().getName();
@@ -361,6 +368,7 @@ final class ExecutorServiceParallelExecutor implements InProcessExecutor {
             scheduleConsumers(update);
           } else if (update.getException().isPresent()) {
             visibleUpdates.offer(VisibleExecutorUpdate.fromThrowable(update.getException().get()));
+            exceptionThrown = true;
           }
           if (System.nanoTime() - updatesStart > maxTimeProcessingUpdatesNanos) {
             break;
@@ -396,17 +404,19 @@ final class ExecutorServiceParallelExecutor implements InProcessExecutor {
     private boolean fireTimers() throws Exception {
       try {
         boolean firedTimers = false;
-        for (Map.Entry<AppliedPTransform<?, ?, ?>, Map<Object, FiredTimers>> transformTimers :
+        for (Map.Entry<
+               AppliedPTransform<?, ?, ?>, Map<StructuralKey<?>, FiredTimers>> transformTimers :
             evaluationContext.extractFiredTimers().entrySet()) {
           AppliedPTransform<?, ?, ?> transform = transformTimers.getKey();
-          for (Map.Entry<Object, FiredTimers> keyTimers : transformTimers.getValue().entrySet()) {
+          for (Map.Entry<StructuralKey<?>, FiredTimers> keyTimers :
+              transformTimers.getValue().entrySet()) {
             for (TimeDomain domain : TimeDomain.values()) {
               Collection<TimerData> delivery = keyTimers.getValue().getTimers(domain);
               if (delivery.isEmpty()) {
                 continue;
               }
               KeyedWorkItem<Object, Object> work =
-                  KeyedWorkItems.timersWorkItem(keyTimers.getKey(), delivery);
+                  KeyedWorkItems.timersWorkItem(keyTimers.getKey().getKey(), delivery);
               @SuppressWarnings({"unchecked", "rawtypes"})
               CommittedBundle<?> bundle =
                   evaluationContext
@@ -427,15 +437,17 @@ final class ExecutorServiceParallelExecutor implements InProcessExecutor {
     }
 
     private boolean shouldShutdown() {
-      if (evaluationContext.isDone()) {
-        LOG.debug("Pipeline is finished. Shutting down. {}");
-        while (!visibleUpdates.offer(VisibleExecutorUpdate.finished())) {
-          visibleUpdates.poll();
+      boolean shouldShutdown = exceptionThrown || evaluationContext.isDone();
+      if (shouldShutdown) {
+        if (evaluationContext.isDone()) {
+          LOG.debug("Pipeline is finished. Shutting down. {}");
+          while (!visibleUpdates.offer(VisibleExecutorUpdate.finished())) {
+            visibleUpdates.poll();
+          }
         }
         executorService.shutdown();
-        return true;
       }
-      return false;
+      return shouldShutdown;
     }
 
     /**

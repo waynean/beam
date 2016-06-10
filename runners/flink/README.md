@@ -1,3 +1,22 @@
+<!--
+    Licensed to the Apache Software Foundation (ASF) under one
+    or more contributor license agreements.  See the NOTICE file
+    distributed with this work for additional information
+    regarding copyright ownership.  The ASF licenses this file
+    to you under the Apache License, Version 2.0 (the
+    "License"); you may not use this file except in compliance
+    with the License.  You may obtain a copy of the License at
+
+      http://www.apache.org/licenses/LICENSE-2.0
+
+    Unless required by applicable law or agreed to in writing,
+    software distributed under the License is distributed on an
+    "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY
+    KIND, either express or implied.  See the License for the
+    specific language governing permissions and limitations
+    under the License.
+-->
+
 Flink Beam Runner (Flink-Runner)
 -------------------------------
 
@@ -27,17 +46,20 @@ and sinks or use the provided support for Apache Kafka.
 
 ### Seamless integration
 
-To execute a Beam program in streaming mode, just enable streaming in the `PipelineOptions`:
+The Flink Runner decides to use batch or streaming execution mode based on whether programs use
+unbounded sources. When unbounded sources are used, it executes in streaming mode, otherwise it
+uses the batch execution mode.
+
+If you wish to explicitly enable streaming mode, please set the streaming flag in the
+`PipelineOptions`:
 
     options.setStreaming(true);
-
-That's it. If you prefer batched execution, simply disable streaming mode.
 
 ## Batch
 
 ### Batch optimization
 
-Flink gives you out-of-core algorithms which operate on its managed memory to perform sorting, 
+Flink gives you out-of-core algorithms which operate on its managed memory to perform sorting,
 caching, and hash table operations. We have optimized operations like CoGroup to use Flink's
 optimized out-of-core implementation.
 
@@ -141,8 +163,8 @@ The contents of the root `pom.xml` should be slightly changed aftewards (explana
   <dependencies>
     <dependency>
       <groupId>org.apache.beam</groupId>
-      <artifactId>flink-runner_2.10</artifactId>
-      <version>0.4-SNAPSHOT</version>
+      <artifactId>beam-runners-flink_2.10</artifactId>
+      <version>0.2.0-incubating-SNAPSHOT</version>
     </dependency>
   </dependencies>
 
@@ -164,11 +186,6 @@ The contents of the root `pom.xml` should be slightly changed aftewards (explana
                   <mainClass>org.apache.beam.runners.flink.examples.WordCount</mainClass>
                 </transformer>
               </transformers>
-              <artifactSet>
-                <excludes>
-                  <exclude>org.apache.flink:*</exclude>
-                </excludes>
-              </artifactSet>
             </configuration>
           </execution>
         </executions>

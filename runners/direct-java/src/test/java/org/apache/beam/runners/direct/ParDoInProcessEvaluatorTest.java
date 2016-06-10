@@ -128,7 +128,7 @@ public class ParDoInProcessEvaluatorTest {
         Matchers.<WindowedValue<?>>containsInAnyOrder(
             second, WindowedValue.of(1, new Instant(2468L), nonGlobalWindow, PaneInfo.NO_FIRING)));
     assertThat(result.getOutputBundles(), Matchers.<UncommittedBundle<?>>contains(outputBundle));
-    assertThat(RecorderFn.processed, containsInAnyOrder(1, 3));
+    assertThat(fn.processed, containsInAnyOrder(1, 3));
     assertThat(
         Iterables.getOnlyElement(result.getOutputBundles()).commit(Instant.now()).getElements(),
         Matchers.<WindowedValue<?>>containsInAnyOrder(
@@ -154,7 +154,7 @@ public class ParDoInProcessEvaluatorTest {
     when(stepContext.getTimerUpdate()).thenReturn(TimerUpdate.empty());
     when(
             evaluationContext.getExecutionContext(
-                Mockito.any(AppliedPTransform.class), Mockito.any(Object.class)))
+                Mockito.any(AppliedPTransform.class), Mockito.any(StructuralKey.class)))
         .thenReturn(executionContext);
     when(evaluationContext.createCounterSet()).thenReturn(new CounterSet());
 
@@ -170,7 +170,7 @@ public class ParDoInProcessEvaluatorTest {
   }
 
   private static class RecorderFn extends DoFn<Integer, Integer> {
-    private static Collection<Integer> processed;
+    private Collection<Integer> processed;
     private final PCollectionView<Integer> view;
 
     public RecorderFn(PCollectionView<Integer> view) {

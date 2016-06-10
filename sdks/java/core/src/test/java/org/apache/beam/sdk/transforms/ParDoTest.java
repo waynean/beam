@@ -24,24 +24,20 @@ import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.include
 import static org.apache.beam.sdk.util.SerializableUtils.serializeToByteArray;
 import static org.apache.beam.sdk.util.StringUtils.byteArrayToJsonString;
 import static org.apache.beam.sdk.util.StringUtils.jsonStringToByteArray;
-
 import static org.hamcrest.Matchers.allOf;
-import static org.hamcrest.Matchers.isA;
+import static org.hamcrest.Matchers.anyOf;
+import static org.hamcrest.Matchers.equalTo;
 import static org.hamcrest.collection.IsIterableContainingInAnyOrder.containsInAnyOrder;
 import static org.hamcrest.collection.IsIterableContainingInOrder.contains;
-import static org.hamcrest.core.AnyOf.anyOf;
-import static org.hamcrest.core.IsEqual.equalTo;
 import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertThat;
 
 import org.apache.beam.sdk.Pipeline;
-import org.apache.beam.sdk.Pipeline.PipelineExecutionException;
 import org.apache.beam.sdk.coders.AtomicCoder;
 import org.apache.beam.sdk.coders.CoderException;
-import org.apache.beam.sdk.coders.ListCoder;
 import org.apache.beam.sdk.coders.VarIntCoder;
-import org.apache.beam.sdk.runners.DirectPipelineRunner;
+import org.apache.beam.sdk.testing.NeedsRunner;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
@@ -52,7 +48,6 @@ import org.apache.beam.sdk.transforms.display.DisplayData.Builder;
 import org.apache.beam.sdk.transforms.display.DisplayDataMatchers;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
-import org.apache.beam.sdk.util.IllegalMutationException;
 import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
@@ -120,7 +115,8 @@ public class ParDoTest implements Serializable {
 
     @Override
     public void startBundle(Context c) {
-      assertEquals(State.UNSTARTED, state);
+      // The Fn can be reused, but only if FinishBundle has been called.
+      assertThat(state, anyOf(equalTo(State.UNSTARTED), equalTo(State.FINISHED)));
       state = State.STARTED;
       outputToAll(c, "started");
     }
@@ -544,6 +540,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testParDoWritingToUndeclaredSideOutput() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -564,6 +561,8 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  // TODO: The exception thrown is runner-specific, even if the behavior is general
+  @Category(NeedsRunner.class)
   public void testParDoUndeclaredSideOutputLimit() {
     Pipeline pipeline = TestPipeline.create();
     PCollection<Integer> input = pipeline.apply(Create.of(Arrays.asList(3)));
@@ -742,6 +741,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testParDoReadingFromUnknownSideInput() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -762,6 +762,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testParDoWithErrorInStartBatch() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -776,6 +777,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testParDoWithErrorInProcessElement() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -790,6 +792,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testParDoWithErrorInFinishBatch() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -909,6 +912,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testMultiOutputChaining() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -1109,6 +1113,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testSideOutputUnknownCoder() throws Exception {
     Pipeline pipeline = TestPipeline.create();
     PCollection<Integer> input = pipeline
@@ -1119,7 +1124,7 @@ public class ParDoTest implements Serializable {
     input.apply(ParDo.of(new SideOutputDummyFn(sideOutputTag))
         .withOutputTags(mainOutputTag, TupleTagList.of(sideOutputTag)));
 
-    thrown.expect(PipelineExecutionException.class);
+    thrown.expect(IllegalStateException.class);
     thrown.expectMessage("Unable to return a default Coder");
     pipeline.run();
   }
@@ -1143,10 +1148,10 @@ public class ParDoTest implements Serializable {
     outputTuple.get(sideOutputTag).finishSpecifyingOutput(); // Check for crashes
     assertEquals(new TestDummyCoder(),
         outputTuple.get(sideOutputTag).getCoder()); // Check for corruption
-    pipeline.run();
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testMainOutputUnregisteredExplicitCoder() {
     Pipeline pipeline = TestPipeline.create();
     PCollection<Integer> input = pipeline
@@ -1163,6 +1168,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testMainOutputApplySideOutputNoCoder() {
     // Regression test: applying a transform to the main output
     // should not cause a crash based on lack of a coder for the
@@ -1203,6 +1209,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testParDoOutputWithTimestamp() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -1224,6 +1231,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testParDoSideOutputWithTimestamp() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -1255,6 +1263,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testParDoShiftTimestamp() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -1277,6 +1286,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testParDoShiftTimestampInvalid() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -1295,6 +1305,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testParDoShiftTimestampInvalidZeroAllowed() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -1381,6 +1392,7 @@ public class ParDoTest implements Serializable {
   }
 
   @Test
+  @Category(NeedsRunner.class)
   public void testWindowingInStartBundleException() {
     Pipeline pipeline = TestPipeline.create();
 
@@ -1402,132 +1414,6 @@ public class ParDoTest implements Serializable {
     thrown.expectMessage("WindowFn attempted to access input timestamp when none was available");
     pipeline.run();
   }
-
-  /**
-   * Tests that a {@link DoFn} that mutates an output with a good equals() fails in the
-   * {@link DirectPipelineRunner}.
-   */
-  @Test
-  public void testMutatingOutputThenOutputDoFnError() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-
-    pipeline
-        .apply(Create.of(42))
-        .apply(ParDo.of(new DoFn<Integer, List<Integer>>() {
-          @Override public void processElement(ProcessContext c) {
-            List<Integer> outputList = Arrays.asList(1, 2, 3, 4);
-            c.output(outputList);
-            outputList.set(0, 37);
-            c.output(outputList);
-          }
-        }));
-
-    thrown.expect(PipelineExecutionException.class);
-    thrown.expectCause(isA(IllegalMutationException.class));
-    thrown.expectMessage("output");
-    thrown.expectMessage("must not be mutated");
-    pipeline.run();
-  }
-
-  /**
-   * Tests that a {@link DoFn} that mutates an output with a good equals() fails in the
-   * {@link DirectPipelineRunner}.
-   */
-  @Test
-  public void testMutatingOutputThenTerminateDoFnError() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-
-    pipeline
-        .apply(Create.of(42))
-        .apply(ParDo.of(new DoFn<Integer, List<Integer>>() {
-          @Override public void processElement(ProcessContext c) {
-            List<Integer> outputList = Arrays.asList(1, 2, 3, 4);
-            c.output(outputList);
-            outputList.set(0, 37);
-          }
-        }));
-
-    thrown.expect(IllegalMutationException.class);
-    thrown.expectMessage("output");
-    thrown.expectMessage("must not be mutated");
-    pipeline.run();
-  }
-
-  /**
-   * Tests that a {@link DoFn} that mutates an output with a bad equals() still fails
-   * in the {@link DirectPipelineRunner}.
-   */
-  @Test
-  public void testMutatingOutputCoderDoFnError() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-
-    pipeline
-        .apply(Create.of(42))
-        .apply(ParDo.of(new DoFn<Integer, byte[]>() {
-          @Override public void processElement(ProcessContext c) {
-            byte[] outputArray = new byte[]{0x1, 0x2, 0x3};
-            c.output(outputArray);
-            outputArray[0] = 0xa;
-            c.output(outputArray);
-          }
-        }));
-
-    thrown.expect(PipelineExecutionException.class);
-    thrown.expectCause(isA(IllegalMutationException.class));
-    thrown.expectMessage("output");
-    thrown.expectMessage("must not be mutated");
-    pipeline.run();
-  }
-
-  /**
-   * Tests that a {@link DoFn} that mutates its input with a good equals() fails in the
-   * {@link DirectPipelineRunner}.
-   */
-  @Test
-  public void testMutatingInputDoFnError() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-
-    pipeline
-        .apply(Create.of(Arrays.asList(1, 2, 3), Arrays.asList(4, 5, 6))
-            .withCoder(ListCoder.of(VarIntCoder.of())))
-        .apply(ParDo.of(new DoFn<List<Integer>, Integer>() {
-          @Override public void processElement(ProcessContext c) {
-            List<Integer> inputList = c.element();
-            inputList.set(0, 37);
-            c.output(12);
-          }
-        }));
-
-    thrown.expect(IllegalMutationException.class);
-    thrown.expectMessage("input");
-    thrown.expectMessage("must not be mutated");
-    pipeline.run();
-  }
-
-  /**
-   * Tests that a {@link DoFn} that mutates an input with a bad equals() still fails
-   * in the {@link DirectPipelineRunner}.
-   */
-  @Test
-  public void testMutatingInputCoderDoFnError() throws Exception {
-    Pipeline pipeline = TestPipeline.create();
-
-    pipeline
-        .apply(Create.of(new byte[]{0x1, 0x2, 0x3}, new byte[]{0x4, 0x5, 0x6}))
-        .apply(ParDo.of(new DoFn<byte[], Integer>() {
-          @Override public void processElement(ProcessContext c) {
-            byte[] inputArray = c.element();
-            inputArray[0] = 0xa;
-            c.output(13);
-          }
-        }));
-
-    thrown.expect(IllegalMutationException.class);
-    thrown.expectMessage("input");
-    thrown.expectMessage("must not be mutated");
-    pipeline.run();
-  }
-
   @Test
   public void testDoFnDisplayData() {
     DoFn<String, String> fn = new DoFn<String, String>() {
