@@ -17,19 +17,23 @@
  */
 package org.apache.beam.runners.dataflow;
 
-import javax.annotation.Nullable;
+import org.apache.beam.sdk.annotations.Experimental;
+
+import com.google.api.services.dataflow.model.Environment;
 
 /**
- * Signals that a job run by a {@link BlockingDataflowRunner} fails during execution, and
- * provides access to the failed job.
+ * An instance of this class can be passed to the
+ * {@link DataflowRunner} to add user defined hooks to be
+ * invoked at various times during pipeline execution.
  */
-public class DataflowJobExecutionException extends DataflowJobException {
-  DataflowJobExecutionException(DataflowPipelineJob job, String message) {
-    this(job, message, null);
-  }
-
-  DataflowJobExecutionException(
-      DataflowPipelineJob job, String message, @Nullable Throwable cause) {
-    super(job, message, cause);
-  }
+@Experimental
+public class DataflowRunnerHooks {
+  /**
+   * Allows the user to modify the environment of their job before their job is submitted
+   * to the service for execution.
+   *
+   * @param environment The environment of the job. Users can make change to this instance in order
+   *     to change the environment with which their job executes on the service.
+   */
+  public void modifyEnvironmentBeforeSubmission(Environment environment) {}
 }
