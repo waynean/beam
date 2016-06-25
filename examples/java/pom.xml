@@ -34,10 +34,6 @@
 
   <packaging>jar</packaging>
 
-  <properties>
-    <skipITs>true</skipITs>
-  </properties>
-
   <build>
     <plugins>
       <plugin>
@@ -54,19 +50,6 @@
             </beamTestPipelineOptions>
           </systemPropertyVariables>
         </configuration>
-      </plugin>
-
-      <plugin>
-        <groupId>org.apache.maven.plugins</groupId>
-        <artifactId>maven-dependency-plugin</artifactId>
-        <executions>
-          <execution>
-            <goals><goal>analyze-only</goal></goals>
-            <configuration>
-              <failOnWarning>true</failOnWarning>
-            </configuration>
-          </execution>
-        </executions>
       </plugin>
 
       <plugin>
