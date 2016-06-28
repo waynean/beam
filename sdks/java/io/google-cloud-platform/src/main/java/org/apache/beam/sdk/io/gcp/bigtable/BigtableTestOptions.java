@@ -15,22 +15,28 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+package org.apache.beam.sdk.io.gcp.bigtable;
+
+import org.apache.beam.sdk.options.Default;
+import org.apache.beam.sdk.options.Description;
+import org.apache.beam.sdk.testing.TestPipelineOptions;
+
 /**
- * Defines transforms for reading and writing common storage formats, including
- * {@link org.apache.beam.sdk.io.AvroIO},
- * {@link org.apache.beam.sdk.io.BigQueryIO}, and
- * {@link org.apache.beam.sdk.io.TextIO}.
- *
- * <p>The classes in this package provide {@code Read} transforms that create PCollections
- * from existing storage:
- * <pre>{@code
- * PCollection<TableRow> inputData = pipeline.apply(
- *     BigQueryIO.Read.from("clouddataflow-readonly:samples.weather_stations"));
- * }</pre>
- * and {@code Write} transforms that persist PCollections to external storage:
- * <pre> {@code
- * PCollection<Integer> numbers = ...;
- * numbers.apply(TextIO.Write.to("gs://my_bucket/path/to/numbers"));
- * } </pre>
+ * Properties needed when using Bigtable with the Beam SDK.
  */
-package org.apache.beam.sdk.io;
+public interface BigtableTestOptions extends TestPipelineOptions {
+  @Description("Project ID for Bigtable")
+  @Default.String("apache-beam-testing")
+  String getProjectId();
+  void setProjectId(String value);
+
+  @Description("Cluster ID for Bigtable")
+  @Default.String("beam-test")
+  String getClusterId();
+  void setClusterId(String value);
+
+  @Description("Zone ID for Bigtable")
+  @Default.String("us-central1-c")
+  String getZoneId();
+  void setZoneId(String value);
+}
