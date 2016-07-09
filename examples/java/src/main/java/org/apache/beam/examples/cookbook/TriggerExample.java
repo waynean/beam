@@ -17,9 +17,9 @@
  */
 package org.apache.beam.examples.cookbook;
 
-import org.apache.beam.examples.common.DataflowExampleOptions;
-import org.apache.beam.examples.common.DataflowExampleUtils;
 import org.apache.beam.examples.common.ExampleBigQueryTableOptions;
+import org.apache.beam.examples.common.ExampleOptions;
+import org.apache.beam.examples.common.ExampleUtils;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.PipelineResult;
 import org.apache.beam.sdk.io.BigQueryIO;
@@ -419,8 +419,7 @@ public class TriggerExample {
   /**
    * Inherits standard configuration options.
    */
-  public interface TrafficFlowOptions
-      extends ExampleBigQueryTableOptions, DataflowExampleOptions {
+  public interface TrafficFlowOptions extends ExampleBigQueryTableOptions, ExampleOptions {
 
     @Description("Input file to read from")
     @Default.String("gs://dataflow-samples/traffic_sensor/"
@@ -434,8 +433,6 @@ public class TriggerExample {
     void setWindowDuration(Integer value);
   }
 
-  private static final String PUBSUB_TIMESTAMP_LABEL_KEY = "timestamp_ms";
-
   public static void main(String[] args) throws Exception {
     TrafficFlowOptions options = PipelineOptionsFactory.fromArgs(args)
         .withValidation()
@@ -444,8 +441,8 @@ public class TriggerExample {
 
     options.setBigQuerySchema(getSchema());
 
-    DataflowExampleUtils dataflowUtils = new DataflowExampleUtils(options);
-    dataflowUtils.setup();
+    ExampleUtils exampleUtils = new ExampleUtils(options);
+    exampleUtils.setup();
 
     Pipeline pipeline = Pipeline.create(options);
 
@@ -465,7 +462,7 @@ public class TriggerExample {
     PipelineResult result = pipeline.run();
 
     // dataflowUtils will try to cancel the pipeline and the injector before the program exits.
-    dataflowUtils.waitToFinish(result);
+    exampleUtils.waitToFinish(result);
   }
 
   /**
