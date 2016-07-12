@@ -30,42 +30,6 @@
           the issue.
         -->
   <Match>
-    <Class name="org.apache.beam.sdk.coders.AvroCoder"/>
-    <Field name="decoder"/>
-    <Bug pattern="SE_BAD_FIELD"/>
-    <!--[BEAM-394] Non-transient non-serializable instance field in serializable class-->
-  </Match>
-  <Match>
-    <Class name="org.apache.beam.sdk.coders.AvroCoder"/>
-    <Field name="encoder"/>
-    <Bug pattern="SE_BAD_FIELD"/>
-    <!--[BEAM-394] Non-transient non-serializable instance field in serializable class-->
-  </Match>
-  <Match>
-    <Class name="org.apache.beam.sdk.coders.AvroCoder"/>
-    <Field name="reader"/>
-    <Bug pattern="SE_BAD_FIELD"/>
-    <!--[BEAM-394] Non-transient non-serializable instance field in serializable class-->
-  </Match>
-  <Match>
-    <Class name="org.apache.beam.sdk.coders.AvroCoder"/>
-    <Field name="writer"/>
-    <Bug pattern="SE_BAD_FIELD"/>
-    <!--[BEAM-394] Non-transient non-serializable instance field in serializable class-->
-  </Match>
-  <Match>
-    <Class name="org.apache.beam.sdk.coders.AvroCoder"/>
-    <Field name="reader"/>
-    <Bug pattern="SE_BAD_FIELD_STORE"/>
-    <!--[BEAM-394] Non-serializable value stored into instance field of a serializable class-->
-  </Match>
-  <Match>
-    <Class name="org.apache.beam.sdk.coders.AvroCoder"/>
-    <Field name="writer"/>
-    <Bug pattern="SE_BAD_FIELD_STORE"/>
-    <!--[BEAM-394] Non-serializable value stored into instance field of a serializable class-->
-  </Match>
-  <Match>
     <Class name="org.apache.beam.sdk.coders.Coder$NonDeterministicException"/>
     <Bug pattern="NM_CLASS_NOT_EXCEPTION"/>
     <!--[BEAM-396] Class is not derived from an Exception, even though it is named as such-->
@@ -81,12 +45,6 @@
     <Field name="jaxbContext"/>
     <Bug pattern="IS2_INCONSISTENT_SYNC"/>
     <!--[BEAM-398] Inconsistent synchronization-->
-  </Match>
-  <Match>
-    <Class name="org.apache.beam.sdk.coders.SerializableCoder"/>
-    <Method name="equals"/>
-    <Bug pattern="NP_EQUALS_SHOULD_HANDLE_NULL_ARGUMENT"/>
-    <!--[BEAM-399] equals() method does not check for null argument-->
   </Match>
   <Match>
     <Class name="org.apache.beam.sdk.coders.StandardCoder"/>
