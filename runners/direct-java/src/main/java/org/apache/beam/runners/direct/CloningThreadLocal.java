@@ -16,5 +16,28 @@
  * limitations under the License.
  */
 
-/** Defines utilities shared by multiple PipelineRunner implementations. */
-package org.apache.beam.sdk.util.common;
+package org.apache.beam.runners.direct;
+
+import org.apache.beam.sdk.util.SerializableUtils;
+
+import java.io.Serializable;
+
+/**
+ * A {@link ThreadLocal} that obtains the initial value by cloning an original value.
+ */
+class CloningThreadLocal<T extends Serializable> extends ThreadLocal<T> {
+  public static <T extends Serializable> CloningThreadLocal<T> of(T original) {
+    return new CloningThreadLocal<>(original);
+  }
+
+  private final T original;
+
+  private CloningThreadLocal(T original) {
+    this.original = original;
+  }
+
+  @Override
+  public T initialValue() {
+    return SerializableUtils.clone(original);
+  }
+}
