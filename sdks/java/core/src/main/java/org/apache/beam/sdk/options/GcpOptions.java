@@ -29,7 +29,6 @@ import com.google.common.base.Strings;
 import com.google.common.io.Files;
 
 import com.fasterxml.jackson.annotation.JsonIgnore;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -317,7 +316,6 @@ public interface GcpOptions extends GoogleApiDebugOptions, PipelineOptions {
       if (!Strings.isNullOrEmpty(tempLocation)) {
         try {
           PathValidator validator = options.as(GcsOptions.class).getPathValidator();
-          System.err.println(validator);
           validator.validateOutputFilePrefixSupported(tempLocation);
         } catch (Exception e) {
           // Ignore the temp location because it is not a valid 'gs://' path.
