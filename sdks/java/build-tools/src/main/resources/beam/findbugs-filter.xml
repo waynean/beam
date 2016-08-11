@@ -44,12 +44,6 @@
     <!--[BEAM-398] Inconsistent synchronization-->
   </Match>
   <Match>
-    <Class name="org.apache.beam.sdk.coders.StandardCoder"/>
-    <Method name="toString"/>
-    <Bug pattern="SBSC_USE_STRINGBUFFER_CONCATENATION"/>
-    <!--[BEAM-401] Method invokes inefficient new String(String) constructor-->
-  </Match>
-  <Match>
     <Class name="org.apache.beam.sdk.io.range.OffsetRangeTracker"/>
     <Field name="done"/>
     <Bug pattern="IS2_INCONSISTENT_SYNC"/>
@@ -114,12 +108,6 @@
     <Field name="entries"/>
     <Bug pattern="SE_BAD_FIELD"/>
     <!--[BEAM-412] Non-transient non-serializable instance field in serializable class-->
-  </Match>
-  <Match>
-    <Class name="org.apache.beam.sdk.util.BitSetCoder"/>
-    <Field name="byteArrayCoder"/>
-    <Bug pattern="SE_TRANSIENT_FIELD_NOT_RESTORED"/>
-    <!--[BEAM-418] Transient field that isn't set by deserialization. -->
   </Match>
   <Match>
     <Class name="org.apache.beam.sdk.util.CombineFnUtil$NonSerializableBoundedKeyedCombineFn"/>
