@@ -165,7 +165,7 @@ import javax.annotation.Nullable;
  * <p>To read from a BigQuery table, apply a {@link BigQueryIO.Read} transformation.
  * This produces a {@link PCollection} of {@link TableRow TableRows} as output:
  * <pre>{@code
- * PCollection<TableRow> shakespeare = pipeline.apply(
+ * PCollection<TableRow> weatherData = pipeline.apply(
  *     BigQueryIO.Read.from("clouddataflow-readonly:samples.weather_stations"));
  * }</pre>
  *
@@ -176,7 +176,7 @@ import javax.annotation.Nullable;
  * input transform.
  *
  * <pre>{@code
- * PCollection<TableRow> shakespeare = pipeline.apply(
+ * PCollection<TableRow> meanTemperatureData = pipeline.apply(
  *     BigQueryIO.Read.fromQuery("SELECT year, mean_temp FROM [samples.weather_stations]"));
  * }</pre>
  *
@@ -1123,9 +1123,9 @@ public class BigQueryIO {
         BoundedSource<T> boundedSource,
         SerializableFunction<T, V> function,
         Coder<V> outputCoder) {
-      this.boundedSource = boundedSource;
-      this.function = function;
-      this.outputCoder = outputCoder;
+      this.boundedSource = checkNotNull(boundedSource, "boundedSource");
+      this.function = checkNotNull(function, "function");
+      this.outputCoder = checkNotNull(outputCoder, "outputCoder");
     }
 
     @Override
@@ -1170,7 +1170,7 @@ public class BigQueryIO {
       private final BoundedReader<T> boundedReader;
 
       private TransformingReader(BoundedReader<T> boundedReader) {
-        this.boundedReader = boundedReader;
+        this.boundedReader = checkNotNull(boundedReader, "boundedReader");
       }
 
       @Override
@@ -1201,8 +1201,8 @@ public class BigQueryIO {
 
       @Override
       public synchronized BoundedSource<V> splitAtFraction(double fraction) {
-        return new TransformingSource<>(
-            boundedReader.splitAtFraction(fraction), function, outputCoder);
+        BoundedSource<T> split = boundedReader.splitAtFraction(fraction);
+        return split == null ? null : new TransformingSource<>(split, function, outputCoder);
       }
 
       @Override
