@@ -15,27 +15,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
+
 package org.apache.beam.sdk.io.gcp.datastore;
 
-import org.apache.beam.sdk.annotations.Experimental;
+import org.apache.beam.sdk.options.Default;
+import org.apache.beam.sdk.options.Description;
+import org.apache.beam.sdk.testing.TestPipelineOptions;
+
+import javax.annotation.Nullable;
 
 /**
- * <p>{@link DatastoreIO} provides an API for reading from and writing to
- * <a href="https://developers.google.com/datastore/">Google Cloud Datastore</a> over different
- * versions of the Datastore Client libraries.
- *
- * <p>To use the v1 version see {@link DatastoreV1}.
+ * DatastoreV1 Datastore related pipeline options.
  */
-@Experimental(Experimental.Kind.SOURCE_SINK)
-public class DatastoreIO {
+public interface V1TestOptions extends TestPipelineOptions {
+  @Description("Project ID to read from datastore")
+  @Default.String("apache-beam-testing")
+  String getProject();
+  void setProject(String value);
 
-  private DatastoreIO() {}
+  @Description("Datastore Entity kind")
+  @Default.String("beam-test")
+  String getKind();
+  void setKind(String value);
 
-  /**
-   * Returns a {@link DatastoreV1} that provides an API for accessing Datastore through v1 version
-   * of Datastore Client library.
-   */
-  public static DatastoreV1 v1() {
-    return new DatastoreV1();
-  }
+  @Description("Datastore Namespace")
+  String getNamespace();
+  void setNamespace(@Nullable String value);
 }
