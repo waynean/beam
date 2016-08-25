@@ -17,6 +17,9 @@
  */
 package org.apache.beam.examples;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.regex.Pattern;
 import org.apache.beam.sdk.Pipeline;
 import org.apache.beam.sdk.io.TextIO;
 import org.apache.beam.sdk.options.Default;
@@ -29,17 +32,12 @@ import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.Sum;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
-
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.util.Arrays;
-import java.util.List;
-import java.util.regex.Pattern;
-
 
 /**
- * An example that verifies word counts in Shakespeare and includes Dataflow best practices.
+ * An example that verifies word counts in Shakespeare and includes Beam best practices.
  *
  * <p>This class, {@link DebuggingWordCount}, is the third in a series of four successively more
  * detailed 'word count' examples. You may first want to take a look at {@link MinimalWordCount}

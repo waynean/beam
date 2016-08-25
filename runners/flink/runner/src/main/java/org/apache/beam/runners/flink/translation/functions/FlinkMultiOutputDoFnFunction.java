@@ -17,6 +17,7 @@
  */
 package org.apache.beam.runners.flink.translation.functions;
 
+import java.util.Map;
 import org.apache.beam.runners.flink.translation.utils.SerializedPipelineOptions;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.OldDoFn;
@@ -25,16 +26,13 @@ import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TupleTag;
-
 import org.apache.flink.api.common.functions.RichMapPartitionFunction;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.util.Collector;
 
-import java.util.Map;
-
 /**
- * Encapsulates a {@link OldDoFn} that uses side outputs
- * inside a Flink {@link org.apache.flink.api.common.functions.RichMapPartitionFunction}.
+ * Encapsulates a {@link OldDoFn} that can emit to multiple
+ * outputs inside a Flink {@link org.apache.flink.api.common.functions.RichMapPartitionFunction}.
  *
  * We get a mapping from {@link org.apache.beam.sdk.values.TupleTag} to output index
  * and must tag all outputs with the output number. Afterwards a filter will filter out
@@ -106,6 +104,9 @@ public class FlinkMultiOutputDoFnFunction<InputT, OutputT>
       }
     }
 
+    // set the windowed value to null so that the special logic for outputting
+    // in startBundle/finishBundle kicks in
+    context = context.forWindowedValue(null);
     this.doFn.finishBundle(context);
   }
 

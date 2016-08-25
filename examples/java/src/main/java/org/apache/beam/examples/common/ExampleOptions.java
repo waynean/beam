@@ -17,26 +17,23 @@
  */
 package org.apache.beam.examples.common;
 
+import com.google.common.base.MoreObjects;
+import java.util.concurrent.ThreadLocalRandom;
 import org.apache.beam.sdk.options.ApplicationNameOptions;
 import org.apache.beam.sdk.options.Default;
 import org.apache.beam.sdk.options.DefaultValueFactory;
 import org.apache.beam.sdk.options.Description;
 import org.apache.beam.sdk.options.PipelineOptions;
-
-import com.google.common.base.MoreObjects;
-
 import org.joda.time.DateTimeUtils;
 import org.joda.time.DateTimeZone;
 import org.joda.time.format.DateTimeFormat;
 import org.joda.time.format.DateTimeFormatter;
 
-import java.util.concurrent.ThreadLocalRandom;
-
 /**
  * Options that can be used to configure the Beam examples.
  */
 public interface ExampleOptions extends PipelineOptions {
-  @Description("Whether to keep jobs running on the Dataflow service after local process exit")
+  @Description("Whether to keep jobs running after local process exit")
   @Default.Boolean(false)
   boolean getKeepJobsRunning();
   void setKeepJobsRunning(boolean keepJobsRunning);
