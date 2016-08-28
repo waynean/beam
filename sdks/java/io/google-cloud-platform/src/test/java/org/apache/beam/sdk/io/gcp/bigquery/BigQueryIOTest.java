@@ -33,7 +33,6 @@ import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.when;
 
 import com.google.api.client.util.Data;
-import com.google.api.client.util.Strings;
 import com.google.api.services.bigquery.model.ErrorProto;
 import com.google.api.services.bigquery.model.Job;
 import com.google.api.services.bigquery.model.JobConfigurationExtract;
@@ -50,6 +49,7 @@ import com.google.api.services.bigquery.model.TableFieldSchema;
 import com.google.api.services.bigquery.model.TableReference;
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.api.services.bigquery.model.TableSchema;
+import com.google.common.base.Strings;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Lists;
@@ -671,7 +671,7 @@ public class BigQueryIOTest implements Serializable {
             .withJobService(mockJobService))
         .withoutValidation();
 
-    Set<DisplayData> displayData = evaluator.displayDataForPrimitiveTransforms(read);
+    Set<DisplayData> displayData = evaluator.displayDataForPrimitiveSourceTransforms(read);
     assertThat("BigQueryIO.Read should include the table spec in its primitive display data",
         displayData, hasItem(hasDisplayItem("table")));
   }
@@ -688,7 +688,7 @@ public class BigQueryIOTest implements Serializable {
             .withJobService(mockJobService))
         .withoutValidation();
 
-    Set<DisplayData> displayData = evaluator.displayDataForPrimitiveTransforms(read);
+    Set<DisplayData> displayData = evaluator.displayDataForPrimitiveSourceTransforms(read);
     assertThat("BigQueryIO.Read should include the query in its primitive display data",
         displayData, hasItem(hasDisplayItem("query")));
   }
