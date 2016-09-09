@@ -34,6 +34,7 @@ import org.junit.runners.JUnit4;
 
 /** Unit tests for {@link AttemptBoundedExponentialBackOff}. */
 @RunWith(JUnit4.class)
+@SuppressWarnings("deprecation") // test of deprecated class
 public class AttemptBoundedExponentialBackOffTest {
   @Rule public ExpectedException exception = ExpectedException.none();
 
