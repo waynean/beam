@@ -390,10 +390,6 @@ public class BigQueryIO {
           "Validation of query \"%1$s\" failed. If the query depends on an earlier stage of the"
           + " pipeline, This validation can be disabled using #withoutValidation.";
 
-      // The maximum number of retries to poll a BigQuery job in the cleanup phase.
-      // We expect the jobs have already DONE, and don't need a high max retires.
-      private static final int CLEANUP_JOB_POLL_MAX_RETRIES = 10;
-
       private Bound() {
         this(
             null /* name */,
@@ -481,6 +477,22 @@ public class BigQueryIO {
         // read is properly specified.
         BigQueryOptions bqOptions = input.getPipeline().getOptions().as(BigQueryOptions.class);
 
+        String tempLocation = bqOptions.getTempLocation();
+        checkArgument(
+            !Strings.isNullOrEmpty(tempLocation),
+            "BigQueryIO.Read needs a GCS temp location to store temp files.");
+        if (bigQueryServices == null) {
+          try {
+            GcsPath.fromUri(tempLocation);
+          } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException(
+                String.format(
+                    "BigQuery temp location expected a valid 'gs://' path, but was given '%s'",
+                    tempLocation),
+                e);
+          }
+        }
+
         TableReference table = getTableWithDefaultProject(bqOptions);
         if (table == null && query == null) {
           throw new IllegalStateException(
@@ -566,8 +578,8 @@ public class BigQueryIO {
                 JobReference jobRef = new JobReference()
                     .setProjectId(executingProject)
                     .setJobId(getExtractJobId(jobIdToken));
-                Job extractJob = bqServices.getJobService(bqOptions).pollJob(
-                    jobRef, CLEANUP_JOB_POLL_MAX_RETRIES);
+                Job extractJob = bqServices.getJobService(bqOptions)
+                    .getJob(jobRef);
 
                 Collection<String> extractFiles = null;
                 if (extractJob != null) {
