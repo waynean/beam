@@ -23,12 +23,16 @@ import com.google.api.services.bigquery.model.TableFieldSchema;
 import com.google.api.services.bigquery.model.TableRow;
 import com.google.api.services.bigquery.model.TableSchema;
 import com.google.common.collect.Lists;
+import com.google.common.io.BaseEncoding;
+
+import java.nio.ByteBuffer;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.avro.Schema;
 import org.apache.avro.generic.GenericData;
 import org.apache.avro.generic.GenericRecord;
 import org.apache.avro.reflect.Nullable;
+import org.apache.avro.util.Utf8;
 import org.apache.beam.sdk.coders.AvroCoder;
 import org.apache.beam.sdk.coders.DefaultCoder;
 import org.junit.Test;
@@ -61,6 +65,8 @@ public class BigQueryAvroUtilsTest {
             new TableFieldSchema().setName("quantity").setType("INTEGER") /* default to NULLABLE */,
             new TableFieldSchema().setName("birthday").setType("TIMESTAMP").setMode("NULLABLE"),
             new TableFieldSchema().setName("flighted").setType("BOOLEAN").setMode("NULLABLE"),
+            new TableFieldSchema().setName("sound").setType("BYTES").setMode("NULLABLE"),
+            new TableFieldSchema().setName("anniversary").setType("DATE").setMode("NULLABLE"),
             new TableFieldSchema().setName("scion").setType("RECORD").setMode("NULLABLE")
                 .setFields(subFields),
             new TableFieldSchema().setName("associates").setType("RECORD").setMode("REPEATED")
@@ -79,19 +85,26 @@ public class BigQueryAvroUtilsTest {
       assertEquals(row, convertedRow);
     }
     {
-      // Test type conversion for TIMESTAMP, INTEGER, BOOLEAN, and FLOAT.
+      // Test type conversion for INTEGER, FLOAT, TIMESTAMP, BOOLEAN, BYTES, and DATE.
       GenericRecord record = new GenericData.Record(avroSchema);
+      byte[] soundBytes = "chirp,chirp".getBytes();
+      ByteBuffer soundByteBuffer = ByteBuffer.wrap(soundBytes);
+      soundByteBuffer.rewind();
       record.put("number", 5L);
       record.put("quality", 5.0);
       record.put("birthday", 5L);
       record.put("flighted", Boolean.TRUE);
+      record.put("sound", soundByteBuffer);
+      record.put("anniversary", new Utf8("2000-01-01"));
       TableRow convertedRow = BigQueryAvroUtils.convertGenericRecordToTableRow(record, tableSchema);
       TableRow row = new TableRow()
           .set("number", "5")
           .set("birthday", "1970-01-01 00:00:00.000005 UTC")
           .set("quality", 5.0)
           .set("associates", new ArrayList<TableRow>())
-          .set("flighted", Boolean.TRUE);
+          .set("flighted", Boolean.TRUE)
+          .set("sound", BaseEncoding.base64().encode(soundBytes))
+          .set("anniversary", "2000-01-01");
       assertEquals(row, convertedRow);
     }
     {
@@ -123,6 +136,8 @@ public class BigQueryAvroUtilsTest {
     @Nullable Long quantity;
     @Nullable Long birthday;  // Exercises TIMESTAMP.
     @Nullable Boolean flighted;
+    @Nullable ByteBuffer sound;
+    @Nullable Utf8 anniversary;
     @Nullable SubBird scion;
     SubBird[] associates;
 
