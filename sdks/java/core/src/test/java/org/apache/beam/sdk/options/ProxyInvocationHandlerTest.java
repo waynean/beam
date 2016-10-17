@@ -244,12 +244,14 @@ public class ProxyInvocationHandlerTest {
   public void testToStringAfterDeserializationContainsJsonEntries() throws Exception {
     ProxyInvocationHandler handler = new ProxyInvocationHandler(Maps.<String, Object>newHashMap());
     Simple proxy = handler.as(Simple.class);
+    Long optionsId = proxy.getOptionsId();
     proxy.setString("stringValue");
     DefaultAnnotations proxy2 = proxy.as(DefaultAnnotations.class);
     proxy2.setLong(57L);
-    assertEquals("Current Settings:\n"
+    assertEquals(String.format("Current Settings:\n"
         + "  long: 57\n"
-        + "  string: \"stringValue\"\n",
+        + "  optionsId: %d\n"
+        + "  string: \"stringValue\"\n", optionsId),
         serializeDeserialize(PipelineOptions.class, proxy2).toString());
   }
 
@@ -257,14 +259,16 @@ public class ProxyInvocationHandlerTest {
   public void testToStringAfterDeserializationContainsOverriddenEntries() throws Exception {
     ProxyInvocationHandler handler = new ProxyInvocationHandler(Maps.<String, Object>newHashMap());
     Simple proxy = handler.as(Simple.class);
+    Long optionsId = proxy.getOptionsId();
     proxy.setString("stringValue");
     DefaultAnnotations proxy2 = proxy.as(DefaultAnnotations.class);
     proxy2.setLong(57L);
     Simple deserializedOptions = serializeDeserialize(Simple.class, proxy2);
     deserializedOptions.setString("overriddenValue");
-    assertEquals("Current Settings:\n"
+    assertEquals(String.format("Current Settings:\n"
         + "  long: 57\n"
-        + "  string: overriddenValue\n",
+        + "  optionsId: %d\n"
+        + "  string: overriddenValue\n", optionsId),
         deserializedOptions.toString());
   }
 
@@ -851,6 +855,29 @@ public class ProxyInvocationHandlerTest {
     FooOptions deserializedOptions = serializeDeserialize(FooOptions.class, options);
     DisplayData deserializedData = DisplayData.from(deserializedOptions);
     assertThat(deserializedData, hasDisplayItem("foo", ""));
+  }
+
+  @Test
+  public void testDisplayDataArrayValue() throws Exception {
+    ArrayOptions options = PipelineOptionsFactory.as(ArrayOptions.class);
+    options.setDeepArray(new String[][] {new String[] {"a", "b"}, new String[] {"c"}});
+    options.setDeepPrimitiveArray(new int[][] {new int[] {1, 2}, new int[] {3}});
+
+    DisplayData data = DisplayData.from(options);
+    assertThat(data, hasDisplayItem("deepArray", "[[a, b], [c]]"));
+    assertThat(data, hasDisplayItem("deepPrimitiveArray", "[[1, 2], [3]]"));
+
+    ArrayOptions deserializedOptions = serializeDeserialize(ArrayOptions.class, options);
+    DisplayData deserializedData = DisplayData.from(deserializedOptions);
+    assertThat(deserializedData, hasDisplayItem("deepPrimitiveArray", "[[1, 2], [3]]"));
+  }
+
+  private interface ArrayOptions extends PipelineOptions {
+    String[][] getDeepArray();
+    void setDeepArray(String[][] value);
+
+    int[][] getDeepPrimitiveArray();
+    void setDeepPrimitiveArray(int[][] value);
   }
 
   @Test

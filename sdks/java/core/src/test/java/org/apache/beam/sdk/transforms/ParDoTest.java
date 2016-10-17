@@ -56,9 +56,14 @@ import org.apache.beam.sdk.transforms.ParDo.Bound;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.transforms.display.DisplayData.Builder;
 import org.apache.beam.sdk.transforms.display.DisplayDataMatchers;
+import org.apache.beam.sdk.transforms.splittabledofn.RestrictionTracker;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.util.common.ElementByteSizeObserver;
+import org.apache.beam.sdk.util.state.StateSpec;
+import org.apache.beam.sdk.util.state.StateSpecs;
+import org.apache.beam.sdk.util.state.ValueState;
+import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.PCollectionView;
@@ -1449,6 +1454,29 @@ public class ParDoTest implements Serializable {
     assertThat(displayData, hasDisplayItem("fn", fn.getClass()));
   }
 
+  /**
+   * A test that we properly reject {@link DoFn} implementations that
+   * include {@link DoFn.StateId} annotations, for now.
+   */
+  @Test
+  public void testUnsupportedState() {
+    thrown.expect(UnsupportedOperationException.class);
+    thrown.expectMessage("cannot yet be used with state");
+
+    DoFn<KV<String, String>, KV<String, String>> fn =
+        new DoFn<KV<String, String>, KV<String, String>>() {
+
+      @StateId("foo")
+      private final StateSpec<Object, ValueState<Integer>> intState =
+          StateSpecs.value(VarIntCoder.of());
+
+      @ProcessElement
+      public void processElement(ProcessContext c) { }
+    };
+
+    ParDo.of(fn);
+  }
+
   @Test
   public void testWithOutputTagsDisplayData() {
     DoFn<String, String> fn = new DoFn<String, String>() {
@@ -1461,12 +1489,57 @@ public class ParDoTest implements Serializable {
       }
     };
 
-    ParDo.BoundMulti parDo = ParDo
-            .withOutputTags(new TupleTag(), TupleTagList.empty())
+    ParDo.BoundMulti<String, String> parDo = ParDo
+            .withOutputTags(new TupleTag<String>(), TupleTagList.empty())
             .of(fn);
 
     DisplayData displayData = DisplayData.from(parDo);
     assertThat(displayData, includesDisplayDataFrom(fn));
     assertThat(displayData, hasDisplayItem("fn", fn.getClass()));
+  }
+
+  private abstract static class SomeTracker implements RestrictionTracker<Object> {}
+  private static class TestSplittableDoFn extends DoFn<Integer, String> {
+    @ProcessElement
+    public void processElement(ProcessContext context, SomeTracker tracker) {}
+
+    @GetInitialRestriction
+    public Object getInitialRestriction(Integer element) {
+      return null;
+    }
+
+    @NewTracker
+    public SomeTracker newTracker(Object restriction) {
+      return null;
+    }
+  }
+
+  @Test
+  public void testRejectsSplittableDoFnByDefault() {
+    // ParDo with a splittable DoFn must be overridden by the runner.
+    // Without an override, applying it directly must fail.
+    Pipeline p = TestPipeline.create();
+
+    thrown.expect(IllegalArgumentException.class);
+    thrown.expectMessage("Splittable DoFn not supported by the current runner");
+
+    p.apply(Create.of(1, 2, 3)).apply(ParDo.of(new TestSplittableDoFn()));
+  }
+
+  @Test
+  public void testMultiRejectsSplittableDoFnByDefault() {
+    // ParDo with a splittable DoFn must be overridden by the runner.
+    // Without an override, applying it directly must fail.
+    Pipeline p = TestPipeline.create();
+
+    thrown.expect(IllegalArgumentException.class);
+    thrown.expectMessage("Splittable DoFn not supported by the current runner");
+
+    p.apply(Create.of(1, 2, 3))
+        .apply(
+            ParDo.of(new TestSplittableDoFn())
+                .withOutputTags(
+                    new TupleTag<String>("main") {},
+                    TupleTagList.of(new TupleTag<String>("side1") {})));
   }
 }

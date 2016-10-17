@@ -65,6 +65,8 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.ThreadSafe;
 import org.apache.beam.sdk.options.PipelineOptionsFactory.JsonIgnorePredicate;
 import org.apache.beam.sdk.options.PipelineOptionsFactory.Registration;
+import org.apache.beam.sdk.options.ValueProvider.RuntimeValueProvider;
+import org.apache.beam.sdk.options.ValueProvider.StaticValueProvider;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.transforms.display.HasDisplayData;
 import org.apache.beam.sdk.util.InstanceBuilder;
@@ -198,11 +200,11 @@ class ProxyInvocationHandler implements InvocationHandler, HasDisplayData {
    * Backing implementation for {@link PipelineOptions#as(Class)}.
    *
    * @param iface The interface that the returned object needs to implement.
-   * @return An object that implements the interface <T>.
+   * @return An object that implements the interface {@code <T>}.
    */
   synchronized <T extends PipelineOptions> T as(Class<T> iface) {
     checkNotNull(iface);
-    checkArgument(iface.isInterface());
+    checkArgument(iface.isInterface(), "Not an interface: %s", iface);
     if (!interfaceToProxyCache.containsKey(iface)) {
       Registration<T> registration =
           PipelineOptionsFactory.validateWellFormed(iface, knownInterfaces);
@@ -292,7 +294,7 @@ class ProxyInvocationHandler implements InvocationHandler, HasDisplayData {
           builder.add(DisplayData.item(option.getKey(), type, value)
               .withNamespace(pipelineInterface));
         } else {
-          builder.add(DisplayData.item(option.getKey(), value.toString())
+          builder.add(DisplayData.item(option.getKey(), displayDataString(value))
               .withNamespace(pipelineInterface));
         }
       }
@@ -321,12 +323,30 @@ class ProxyInvocationHandler implements InvocationHandler, HasDisplayData {
             builder.add(DisplayData.item(jsonOption.getKey(), type, value)
                 .withNamespace(spec.getDefiningInterface()));
           } else {
-            builder.add(DisplayData.item(jsonOption.getKey(), value.toString())
+            builder.add(DisplayData.item(jsonOption.getKey(), displayDataString(value))
                 .withNamespace(spec.getDefiningInterface()));
           }
         }
       }
     }
+  }
+
+  /**
+   * {@link Object#toString()} wrapper to extract display data values for various types.
+   */
+  private String displayDataString(Object value) {
+    checkNotNull(value, "value cannot be null");
+    if (!value.getClass().isArray()) {
+      return value.toString();
+    }
+    if (!value.getClass().getComponentType().isPrimitive()) {
+      return Arrays.deepToString((Object[]) value);
+    }
+
+    // At this point, we have some type of primitive array. Arrays.deepToString(..) requires an
+    // Object array, but will unwrap nested primitive arrays.
+    String wrapped = Arrays.deepToString(new Object[] {value});
+    return wrapped.substring(1, wrapped.length() - 1);
   }
 
   /**
@@ -450,35 +470,33 @@ class ProxyInvocationHandler implements InvocationHandler, HasDisplayData {
    */
   @SuppressWarnings({"unchecked", "rawtypes"})
   private Object getDefault(PipelineOptions proxy, Method method) {
+    if (method.getReturnType().equals(RuntimeValueProvider.class)) {
+      throw new RuntimeException(String.format(
+        "Method %s should not have return type "
+        + "RuntimeValueProvider, use ValueProvider instead.", method.getName()));
+    }
+    if (method.getReturnType().equals(StaticValueProvider.class)) {
+      throw new RuntimeException(String.format(
+        "Method %s should not have return type "
+        + "StaticValueProvider, use ValueProvider instead.", method.getName()));
+    }
+    @Nullable Object defaultObject = null;
     for (Annotation annotation : method.getAnnotations()) {
-      if (annotation instanceof Default.Class) {
-        return ((Default.Class) annotation).value();
-      } else if (annotation instanceof Default.String) {
-        return ((Default.String) annotation).value();
-      } else if (annotation instanceof Default.Boolean) {
-        return ((Default.Boolean) annotation).value();
-      } else if (annotation instanceof Default.Character) {
-        return ((Default.Character) annotation).value();
-      } else if (annotation instanceof Default.Byte) {
-        return ((Default.Byte) annotation).value();
-      } else if (annotation instanceof Default.Short) {
-        return ((Default.Short) annotation).value();
-      } else if (annotation instanceof Default.Integer) {
-        return ((Default.Integer) annotation).value();
-      } else if (annotation instanceof Default.Long) {
-        return ((Default.Long) annotation).value();
-      } else if (annotation instanceof Default.Float) {
-        return ((Default.Float) annotation).value();
-      } else if (annotation instanceof Default.Double) {
-        return ((Default.Double) annotation).value();
-      } else if (annotation instanceof Default.Enum) {
-        return Enum.valueOf((Class<Enum>) method.getReturnType(),
-            ((Default.Enum) annotation).value());
-      } else if (annotation instanceof Default.InstanceFactory) {
-        return InstanceBuilder.ofType(((Default.InstanceFactory) annotation).value())
-            .build()
-            .create(proxy);
+      defaultObject = returnDefaultHelper(annotation, proxy, method);
+      if (defaultObject != null) {
+        break;
       }
+    }
+    if (method.getReturnType().equals(ValueProvider.class)) {
+      return defaultObject == null
+        ? new RuntimeValueProvider(
+          method.getName(), (Class<? extends PipelineOptions>) method.getDeclaringClass(),
+          proxy.getOptionsId())
+        : new RuntimeValueProvider(
+          method.getName(), (Class<? extends PipelineOptions>) method.getDeclaringClass(),
+          defaultObject, proxy.getOptionsId());
+    } else if (defaultObject != null) {
+      return defaultObject;
     }
 
     /*
@@ -486,6 +504,43 @@ class ProxyInvocationHandler implements InvocationHandler, HasDisplayData {
      * a default value as defined by the JLS.
      */
     return Defaults.defaultValue(method.getReturnType());
+  }
+
+  /**
+   * Helper method to return standard Default cases.
+   */
+  @Nullable
+  private Object returnDefaultHelper(
+    Annotation annotation, PipelineOptions proxy, Method method) {
+    if (annotation instanceof Default.Class) {
+      return ((Default.Class) annotation).value();
+    } else if (annotation instanceof Default.String) {
+      return ((Default.String) annotation).value();
+    } else if (annotation instanceof Default.Boolean) {
+      return ((Default.Boolean) annotation).value();
+    } else if (annotation instanceof Default.Character) {
+      return ((Default.Character) annotation).value();
+    } else if (annotation instanceof Default.Byte) {
+      return ((Default.Byte) annotation).value();
+    } else if (annotation instanceof Default.Short) {
+      return ((Default.Short) annotation).value();
+    } else if (annotation instanceof Default.Integer) {
+      return ((Default.Integer) annotation).value();
+    } else if (annotation instanceof Default.Long) {
+      return ((Default.Long) annotation).value();
+    } else if (annotation instanceof Default.Float) {
+      return ((Default.Float) annotation).value();
+    } else if (annotation instanceof Default.Double) {
+      return ((Default.Double) annotation).value();
+    } else if (annotation instanceof Default.Enum) {
+      return Enum.valueOf((Class<Enum>) method.getReturnType(),
+                          ((Default.Enum) annotation).value());
+    } else if (annotation instanceof Default.InstanceFactory) {
+      return InstanceBuilder.ofType(((Default.InstanceFactory) annotation).value())
+        .build()
+        .create(proxy);
+    }
+    return null;
   }
 
   /**
@@ -639,6 +694,7 @@ class ProxyInvocationHandler implements InvocationHandler, HasDisplayData {
       PipelineOptions options =
           new ProxyInvocationHandler(Maps.<String, BoundValue>newHashMap(), fields)
               .as(PipelineOptions.class);
+      ValueProvider.RuntimeValueProvider.setRuntimeOptions(options);
       return options;
     }
   }

@@ -53,6 +53,11 @@ page at http://checkstyle.sourceforge.net/config.html -->
     <property name="severity" value="error"/>
   </module>
 
+  <!-- Prevent *Tests.java as tools may not pick them up -->
+  <module name="RegexpOnFilename">
+    <property name="fileNamePattern" value=".*Tests\.java$" />
+  </module>
+
   <!-- Allow use of comment to suppress javadocstyle -->
   <module name="SuppressionCommentFilter">
     <property name="offCommentFormat" value="CHECKSTYLE.OFF\: ([\w\|]+)"/>
@@ -147,6 +152,9 @@ page at http://checkstyle.sourceforge.net/config.html -->
       <property name="allowThrowsTagsForSubclasses" value="true"/>
       <property name="allowUndeclaredRTE" value="true"/>
     </module>
+
+    <!-- Check that paragraph tags are used correctly in Javadoc. -->
+    <module name="JavadocParagraph"/>
 
     <module name="JavadocType">
       <property name="scope" value="protected"/>
