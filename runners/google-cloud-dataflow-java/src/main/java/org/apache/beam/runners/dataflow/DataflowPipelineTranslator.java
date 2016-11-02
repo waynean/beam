@@ -479,6 +479,10 @@ public class DataflowPipelineTranslator {
       workerPools.add(workerPool);
       environment.setWorkerPools(workerPools);
 
+      if (options.getServiceAccount() != null) {
+        environment.setServiceAccountEmail(options.getServiceAccount());
+      }
+
       pipeline.traverseTopologically(this);
       return job;
     }
@@ -930,7 +934,7 @@ public class DataflowPipelineTranslator {
                 !windowingStrategy.getWindowFn().isNonMerging()
                 || (isStreaming && !transform.fewKeys())
                 // TODO: Allow combiner lifting on the non-default trigger, as appropriate.
-                || !(windowingStrategy.getTrigger().getSpec() instanceof DefaultTrigger);
+                || !(windowingStrategy.getTrigger() instanceof DefaultTrigger);
             context.addInput(
                 PropertyNames.DISALLOW_COMBINER_LIFTING, disallowCombinerLifting);
             context.addInput(
@@ -1063,8 +1067,10 @@ public class DataflowPipelineTranslator {
     context.addInput(PropertyNames.USER_FN, fn.getClass().getName());
     context.addInput(
         PropertyNames.SERIALIZED_FN,
-        byteArrayToJsonString(serializeToByteArray(
-            new DoFnInfo(fn, windowingStrategy, sideInputs, inputCoder, mainOutput, outputMap))));
+        byteArrayToJsonString(
+            serializeToByteArray(
+                DoFnInfo.forFn(
+                    fn, windowingStrategy, sideInputs, inputCoder, mainOutput, outputMap))));
   }
 
   private static BiMap<Long, TupleTag<?>> translateOutputs(

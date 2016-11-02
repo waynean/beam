@@ -29,11 +29,10 @@ import org.apache.beam.sdk.util.ExecutionContext;
  * typically from the {@link DoFn} constructor. Elements can be added to the
  * {@code Aggregator} by calling {@link Aggregator#addValue}.
  *
- * <p>Aggregators are visible in the monitoring UI, when the pipeline is run
- * using DataflowRunner or BlockingDataflowRunner, along with
- * their current value. Aggregators may not become visible until the system
- * begins executing the ParDo transform that created them and/or their initial
- * value is changed.
+ * <p>Aggregators are visible in the monitoring UI, when the pipeline is run using
+ * {@link DataflowRunner} along with their current value.
+ * Aggregators may not become visible until the system begins executing the ParDo transform
+ * that created them and/or their initial value is changed.
  *
  * <p>Example:
  * <pre> {@code
@@ -73,8 +72,10 @@ public interface Aggregator<InputT, OutputT> {
   CombineFn<InputT, ?, OutputT> getCombineFn();
 
   /**
-   * A factory for creating aggregators.
+   * @deprecated this is for use only by runners and exists only for a migration period. Please
+   * use the identical interface in org.apache.beam.runners.core
    */
+  @Deprecated
   interface AggregatorFactory {
     /**
      * Create an aggregator with the given {@code name} and {@link CombineFn}.
@@ -87,11 +88,4 @@ public interface Aggregator<InputT, OutputT> {
         Class<?> fnClass, ExecutionContext.StepContext stepContext,
         String aggregatorName, CombineFn<InputT, AccumT, OutputT> combine);
   }
-
-  // TODO: Consider the following additional API conveniences:
-  // - In addition to createAggregator(), consider adding getAggregator() to
-  //   avoid the need to store the aggregator locally in a DoFn, i.e., create
-  //   if not already present.
-  // - Add a shortcut for the most common aggregator:
-  //   c.createAggregator("name", new Sum.SumIntegerFn()).
 }

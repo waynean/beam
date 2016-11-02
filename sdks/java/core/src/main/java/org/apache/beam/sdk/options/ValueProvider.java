@@ -33,7 +33,6 @@ import com.fasterxml.jackson.databind.SerializerProvider;
 import com.fasterxml.jackson.databind.annotation.JsonDeserialize;
 import com.fasterxml.jackson.databind.annotation.JsonSerialize;
 import com.fasterxml.jackson.databind.deser.ContextualDeserializer;
-
 import java.io.IOException;
 import java.io.Serializable;
 import java.lang.reflect.InvocationHandler;
@@ -41,6 +40,7 @@ import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.concurrent.ConcurrentHashMap;
 import javax.annotation.Nullable;
+import org.apache.beam.sdk.transforms.SerializableFunction;
 
 /**
  * {@link ValueProvider} is an interface which abstracts the notion of
@@ -94,6 +94,40 @@ public interface ValueProvider<T> {
   }
 
   /**
+   * {@link NestedValueProvider} is an implementation of {@link ValueProvider} that
+   * allows for wrapping another {@link ValueProvider} object.
+   */
+  class NestedValueProvider<T, X> implements ValueProvider<T>, Serializable {
+
+    private final ValueProvider<X> value;
+    private final SerializableFunction<X, T> translator;
+
+    NestedValueProvider(ValueProvider<X> value, SerializableFunction<X, T> translator) {
+      this.value = checkNotNull(value);
+      this.translator = checkNotNull(translator);
+    }
+
+    /**
+     * Creates a {@link NestedValueProvider} that wraps the provided value.
+     */
+    public static <T, X> NestedValueProvider<T, X> of(
+        ValueProvider<X> value, SerializableFunction<X, T> translator) {
+      NestedValueProvider<T, X> factory = new NestedValueProvider<T, X>(value, translator);
+      return factory;
+    }
+
+    @Override
+    public T get() {
+      return translator.apply(value.get());
+    }
+
+    @Override
+    public boolean isAccessible() {
+      return value.isAccessible();
+    }
+  }
+
+  /**
    * {@link RuntimeValueProvider} is an implementation of {@link ValueProvider} that
    * allows for a value to be provided at execution time rather than at graph
    * construction time.
@@ -108,6 +142,7 @@ public interface ValueProvider<T> {
 
     private final Class<? extends PipelineOptions> klass;
     private final String methodName;
+    private final String propertyName;
     @Nullable
     private final T defaultValue;
     private final Long optionsId;
@@ -116,9 +151,10 @@ public interface ValueProvider<T> {
      * Creates a {@link RuntimeValueProvider} that will query the provided
      * {@code optionsId} for a value.
      */
-    RuntimeValueProvider(String methodName, Class<? extends PipelineOptions> klass,
-                         Long optionsId) {
+    RuntimeValueProvider(String methodName, String propertyName,
+                         Class<? extends PipelineOptions> klass, Long optionsId) {
       this.methodName = methodName;
+      this.propertyName = propertyName;
       this.klass = klass;
       this.defaultValue = null;
       this.optionsId = optionsId;
@@ -128,9 +164,11 @@ public interface ValueProvider<T> {
      * Creates a {@link RuntimeValueProvider} that will query the provided
      * {@code optionsId} for a value, or use the default if no value is available.
      */
-    RuntimeValueProvider(String methodName, Class<? extends PipelineOptions> klass,
+    RuntimeValueProvider(String methodName, String propertyName,
+                         Class<? extends PipelineOptions> klass,
       T defaultValue, Long optionsId) {
       this.methodName = methodName;
+      this.propertyName = propertyName;
       this.klass = klass;
       this.defaultValue = defaultValue;
       this.optionsId = optionsId;
@@ -166,6 +204,13 @@ public interface ValueProvider<T> {
     public boolean isAccessible() {
       PipelineOptions options = optionsMap.get(optionsId);
       return options != null;
+    }
+
+    /**
+     * Returns the property name that corresponds to this provider.
+     */
+    public String propertyName() {
+      return propertyName;
     }
   }
 
