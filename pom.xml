@@ -133,17 +133,18 @@
     <woodstox.version>4.4.1</woodstox.version>
     
     <compiler.error.flag>-Werror</compiler.error.flag>
+    <compiler.default.pkginfo.flag>-Xpkginfo:always</compiler.default.pkginfo.flag>
+    <compiler.default.exclude>nothing</compiler.default.exclude>
   </properties>
 
   <packaging>pom</packaging>
 
   <modules>
+    <!-- sdks/java/build-tools has project-wide configuration. To make these available
+      in all modules, link it directly to the parent pom.xml. -->
+    <module>sdks/java/build-tools</module>
     <module>sdks</module>
     <module>runners</module>
-    <!-- sdks/java/maven-archetypes has several dependencies on the DataflowPipelineRunner. 
-      Until these are refactored out or a released artifact exists, we need to modify the 
-      build order. -->
-    <module>sdks/java/maven-archetypes</module>
     <module>examples</module>
   </modules>
 
@@ -159,6 +160,9 @@
             <plugin>
               <groupId>org.apache.maven.plugins</groupId>
               <artifactId>maven-javadoc-plugin</artifactId>
+              <configuration>
+                <additionalparam>${beam.javadoc_opts}</additionalparam>
+              </configuration>
               <executions>
                 <execution>
                   <id>javadoc</id>
@@ -211,6 +215,11 @@
             <groupId>org.apache.rat</groupId>
             <artifactId>apache-rat-plugin</artifactId>
           </plugin>
+
+          <plugin>
+            <groupId>org.apache.maven.plugins</groupId>
+            <artifactId>maven-javadoc-plugin</artifactId>
+          </plugin>
         </plugins>
       </build>
     </profile>
@@ -221,8 +230,51 @@
         <jdk>[1.8,)</jdk>
       </activation>
       <properties>
-        <beam.javadoc_opts>-Xdoclint:-missing</beam.javadoc_opts>
+        <beam.javadoc_opts>-Xdoclint:all -Xdoclint:-missing</beam.javadoc_opts>
       </properties>
+    </profile>
+
+    <profile>
+      <id>java7-packageinfo</id>
+      <activation>
+        <jdk>1.7</jdk>
+      </activation>
+      <properties>
+        <!--
+         Exclude package-info.java from main compilation to work around
+         https://jira.codehaus.org/browse/MCOMPILER-205
+         -->
+        <compiler.default.pkginfo.flag>-Xpkginfo:legacy</compiler.default.pkginfo.flag>
+        <compiler.default.exclude>**/package-info.java</compiler.default.exclude>
+      </properties>
+      <build>
+        <plugins>
+          <plugin>
+            <artifactId>maven-compiler-plugin</artifactId>
+            <executions>
+              <!--
+               Compile just package-info.java to avoid
+               https://bugs.openjdk.java.net/browse/JDK-8022161
+               -->
+              <execution>
+                <id>compile-package-info</id>
+                <goals>
+                  <goal>compile</goal>
+                </goals>
+                <phase>compile</phase>
+                <configuration>
+                  <compilerArgs>
+                    <arg>-Xpkginfo:always</arg>
+                  </compilerArgs>
+                  <includes>
+                    <include>**/package-info.java</include>
+                  </includes>
+                </configuration>
+              </execution>
+            </executions>
+          </plugin>
+        </plugins>
+      </build>
     </profile>
 
     <profile>
@@ -832,10 +884,6 @@
           </configuration>
           <executions>
 
-            <!--
-              Exclude package-info.java from main compilation to work around
-              https://jira.codehaus.org/browse/MCOMPILER-205
-            -->
             <execution>
               <id>default-compile</id>
               <goals>
@@ -843,29 +891,12 @@
               </goals>
               <phase>compile</phase>
               <configuration>
-                <excludes>
-                  <exclude>**/package-info.java</exclude>
-                </excludes>
-              </configuration>
-            </execution>
-
-            <!-- 
-              Compile just package-info.java to avoid 
-              https://bugs.openjdk.java.net/browse/JDK-8022161
-            -->
-            <execution>
-              <id>compile-package-info</id>
-              <goals>
-                <goal>compile</goal>
-              </goals>
-              <phase>compile</phase>
-              <configuration>
                 <compilerArgs>
-                  <arg>-Xpkginfo:always</arg>
+                  <arg>${compiler.default.pkginfo.flag}</arg>
                 </compilerArgs>
-                <includes>
-                  <include>**/package-info.java</include>
-                </includes>
+                <excludes>
+                  <exclude>${compiler.default.exclude}</exclude>
+                </excludes>
               </configuration>
             </execution>
           </executions>
