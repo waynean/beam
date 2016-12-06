@@ -15,24 +15,23 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.sdk.util.state;
 
-import org.apache.beam.sdk.util.TimerInternals;
+package org.apache.beam.runners.spark.aggregators;
+
+import org.junit.rules.ExternalResource;
 
 /**
- * A callback that processes a {@link TimerInternals.TimerData TimerData}.
- *
- * @deprecated Use InMemoryTimerInternals advance and remove methods instead of callback.
+ * A rule that clears the {@link org.apache.beam.runners.spark.aggregators.AccumulatorSingleton}
+ * which represents the Beam {@link org.apache.beam.sdk.transforms.Aggregator}s.
  */
-@Deprecated
-public interface TimerCallback {
-  /** Processes the {@link TimerInternals.TimerData TimerData}. */
-  void onTimer(TimerInternals.TimerData timer) throws Exception;
+public class ClearAggregatorsRule extends ExternalResource {
 
-  TimerCallback NO_OP = new TimerCallback() {
-    @Override
-    public void onTimer(TimerInternals.TimerData timer) throws Exception {
-      // Nothing
-    }
-  };
+  @Override
+  protected void before() throws Throwable {
+    clearNamedAggregators();
+  }
+
+  public void clearNamedAggregators() {
+    AccumulatorSingleton.clear();
+  }
 }

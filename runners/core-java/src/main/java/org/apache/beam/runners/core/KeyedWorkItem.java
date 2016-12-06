@@ -15,24 +15,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.sdk.util.state;
+package org.apache.beam.runners.core;
 
-import org.apache.beam.sdk.util.TimerInternals;
+import org.apache.beam.sdk.util.TimerInternals.TimerData;
+import org.apache.beam.sdk.util.WindowedValue;
 
 /**
- * A callback that processes a {@link TimerInternals.TimerData TimerData}.
+ * Interface that contains all the timers and elements associated with a specific work item.
  *
- * @deprecated Use InMemoryTimerInternals advance and remove methods instead of callback.
+ * @param <K> the key type
+ * @param <ElemT> the element type
  */
-@Deprecated
-public interface TimerCallback {
-  /** Processes the {@link TimerInternals.TimerData TimerData}. */
-  void onTimer(TimerInternals.TimerData timer) throws Exception;
+public interface KeyedWorkItem<K, ElemT> {
+  /**
+   * Returns the key.
+   */
+  K key();
 
-  TimerCallback NO_OP = new TimerCallback() {
-    @Override
-    public void onTimer(TimerInternals.TimerData timer) throws Exception {
-      // Nothing
-    }
-  };
+  /**
+   * Returns an iterable containing the timers.
+   */
+  Iterable<TimerData> timersIterable();
+
+  /**
+   * Returns an iterable containing the elements.
+   */
+  Iterable<WindowedValue<ElemT>> elementsIterable();
 }
