@@ -14,34 +14,28 @@
  * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
  * See the License for the specific language governing permissions and
  * limitations under the License.
+ *
  */
-package org.apache.beam.sdk.metrics;
 
-import com.google.auto.value.AutoValue;
-import java.io.Serializable;
+package org.apache.beam.sdk.runners;
+
 import org.apache.beam.sdk.annotations.Experimental;
 import org.apache.beam.sdk.annotations.Experimental.Kind;
+import org.apache.beam.sdk.transforms.PTransform;
+import org.apache.beam.sdk.values.PInput;
+import org.apache.beam.sdk.values.POutput;
 
 /**
- * The name of a metric consists of a {@link #namespace} and a {@link #name}. The {@link #namespace}
- * allows grouping related metrics together and also prevents collisions between multiple metrics
- * with the same name.
+ * Produces {@link PipelineRunner}-specific overrides of {@link PTransform PTransforms}, and
+ * provides mappings between original and replacement outputs.
  */
-@Experimental(Kind.METRICS)
-@AutoValue
-public abstract class MetricName implements Serializable {
-
-  /** The namespace associated with this metric. */
-  public abstract String namespace();
-
-  /** The name of this metric. */
-  public abstract String name();
-
-  public static MetricName named(String namespace, String name) {
-    return new AutoValue_MetricName(namespace, name);
-  }
-
-  public static MetricName named(Class<?> namespace, String name) {
-    return new AutoValue_MetricName(namespace.getName(), name);
-  }
+@Experimental(Kind.CORE_RUNNERS_ONLY)
+public interface PTransformOverrideFactory<
+    InputT extends PInput,
+    OutputT extends POutput,
+    TransformT extends PTransform<? super InputT, OutputT>> {
+  /**
+   * Returns a {@link PTransform} that produces equivalent output to the provided transform.
+   */
+  PTransform<InputT, OutputT> getReplacementTransform(TransformT transform);
 }
