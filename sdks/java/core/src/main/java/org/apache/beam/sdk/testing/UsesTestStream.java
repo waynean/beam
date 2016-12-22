@@ -15,24 +15,10 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.runners.core;
-
-import org.apache.beam.sdk.transforms.Aggregator;
-import org.apache.beam.sdk.transforms.Combine.CombineFn;
-import org.apache.beam.sdk.transforms.DoFn;
+package org.apache.beam.sdk.testing;
 
 /**
- * A factory for creating aggregators.
+ * Category tag for tests that use {@link TestStream}, which is not a part of the Beam model
+ * but a special feature currently only implemented by the direct runner.
  */
-public interface AggregatorFactory {
-  /**
-   * Create an aggregator with the given {@code name} and {@link CombineFn}.
-   *
-   *  <p>This method is called to create an aggregator for a {@link DoFn}. It receives the
-   *  class of the {@link DoFn} being executed and the context of the step it is being
-   *  executed in.
-   */
-  <InputT, AccumT, OutputT> Aggregator<InputT, OutputT> createAggregatorForDoFn(
-      Class<?> fnClass, ExecutionContext.StepContext stepContext,
-      String aggregatorName, CombineFn<InputT, AccumT, OutputT> combine);
-}
+public interface UsesTestStream {}
