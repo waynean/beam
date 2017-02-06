@@ -34,9 +34,7 @@ import org.apache.beam.sdk.transforms.Aggregator;
 import org.apache.beam.sdk.transforms.Combine.CombineFn;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.DoFn.Context;
-import org.apache.beam.sdk.transforms.DoFn.InputProvider;
 import org.apache.beam.sdk.transforms.DoFn.OnTimerContext;
-import org.apache.beam.sdk.transforms.DoFn.OutputReceiver;
 import org.apache.beam.sdk.transforms.DoFn.ProcessContext;
 import org.apache.beam.sdk.transforms.reflect.DoFnInvoker;
 import org.apache.beam.sdk.transforms.reflect.DoFnInvokers;
@@ -439,17 +437,7 @@ public class SimpleDoFnRunner<InputT, OutputT> implements DoFnRunner<InputT, Out
     }
 
     @Override
-    public InputProvider<InputT> inputProvider() {
-      throw new UnsupportedOperationException("InputProvider is for testing only.");
-    }
-
-    @Override
-    public OutputReceiver<OutputT> outputReceiver() {
-      throw new UnsupportedOperationException("OutputReceiver is for testing only.");
-    }
-
-    @Override
-    public <RestrictionT> RestrictionTracker<RestrictionT> restrictionTracker() {
+    public RestrictionTracker<?> restrictionTracker() {
       throw new UnsupportedOperationException(
           "Cannot access RestrictionTracker outside of @ProcessElement method.");
     }
@@ -626,17 +614,7 @@ public class SimpleDoFnRunner<InputT, OutputT> implements DoFnRunner<InputT, Out
     }
 
     @Override
-    public InputProvider<InputT> inputProvider() {
-      throw new UnsupportedOperationException("InputProvider parameters are not supported.");
-    }
-
-    @Override
-    public OutputReceiver<OutputT> outputReceiver() {
-      throw new UnsupportedOperationException("OutputReceiver parameters are not supported.");
-    }
-
-    @Override
-    public <RestrictionT> RestrictionTracker<RestrictionT> restrictionTracker() {
+    public RestrictionTracker<?> restrictionTracker() {
       throw new UnsupportedOperationException("RestrictionTracker parameters are not supported.");
     }
 
@@ -744,17 +722,7 @@ public class SimpleDoFnRunner<InputT, OutputT> implements DoFnRunner<InputT, Out
     }
 
     @Override
-    public InputProvider<InputT> inputProvider() {
-      throw new UnsupportedOperationException("InputProvider parameters are not supported.");
-    }
-
-    @Override
-    public OutputReceiver<OutputT> outputReceiver() {
-      throw new UnsupportedOperationException("OutputReceiver parameters are not supported.");
-    }
-
-    @Override
-    public <RestrictionT> RestrictionTracker<RestrictionT> restrictionTracker() {
+    public RestrictionTracker<?> restrictionTracker() {
       throw new UnsupportedOperationException("RestrictionTracker parameters are not supported.");
     }
 

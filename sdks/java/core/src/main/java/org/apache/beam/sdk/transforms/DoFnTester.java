@@ -140,6 +140,10 @@ public class DoFnTester<InputT, OutputT> implements AutoCloseable {
     return (StateInternals<K>) stateInternals;
   }
 
+  public PipelineOptions getPipelineOptions() {
+    return options;
+  }
+
   /**
    * When a {@link DoFnTester} should clone the {@link DoFn} under test and how it should manage
    * the lifecycle of the {@link DoFn}.
@@ -287,8 +291,8 @@ public class DoFnTester<InputT, OutputT> implements AutoCloseable {
       startBundle();
     }
     try {
-      final TestProcessContext processContext =
-          new TestProcessContext(
+      final DoFn<InputT, OutputT>.ProcessContext processContext =
+          createProcessContext(
               ValueInSingleWindow.of(element, timestamp, window, PaneInfo.NO_FIRING));
       fnInvoker.invokeProcessElement(
           new DoFnInvoker.ArgumentProvider<InputT, OutputT>() {
@@ -315,19 +319,7 @@ public class DoFnTester<InputT, OutputT> implements AutoCloseable {
             }
 
             @Override
-            public DoFn.InputProvider<InputT> inputProvider() {
-              throw new UnsupportedOperationException(
-                  "Not expected to access InputProvider from DoFnTester");
-            }
-
-            @Override
-            public DoFn.OutputReceiver<OutputT> outputReceiver() {
-              throw new UnsupportedOperationException(
-                  "Not expected to access OutputReceiver from DoFnTester");
-            }
-
-            @Override
-            public <RestrictionT> RestrictionTracker<RestrictionT> restrictionTracker() {
+            public RestrictionTracker<?> restrictionTracker() {
               throw new UnsupportedOperationException(
                   "Not expected to access RestrictionTracker from a regular DoFn in DoFnTester");
             }
@@ -640,6 +632,11 @@ public class DoFnTester<InputT, OutputT> implements AutoCloseable {
       }
       return aggregator;
     }
+  }
+
+  public DoFn<InputT, OutputT>.ProcessContext createProcessContext(
+      ValueInSingleWindow<InputT> element) {
+    return new TestProcessContext(element);
   }
 
   private class TestProcessContext extends DoFn<InputT, OutputT>.ProcessContext {

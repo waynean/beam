@@ -81,6 +81,7 @@ public class ResumeFromCheckpointStreamingTest {
   );
   private static final String[] EXPECTED = {"k1,v1", "k2,v2", "k3,v3", "k4,v4"};
   private static final long EXPECTED_AGG_FIRST = 4L;
+  private static final long EXPECTED_AGG_SECOND = 8L;
 
   @Rule
   public TemporaryFolder checkpointParentDir = new TemporaryFolder();
@@ -141,8 +142,8 @@ public class ResumeFromCheckpointStreamingTest {
     res = runAgain(options);
     long processedMessages2 = res.getAggregatorValue("processedMessages", Long.class);
     assertThat(String.format("Expected %d processed messages count but "
-        + "found %d", EXPECTED_AGG_FIRST, processedMessages2), processedMessages2,
-            equalTo(EXPECTED_AGG_FIRST));
+        + "found %d", EXPECTED_AGG_SECOND, processedMessages2), processedMessages2,
+            equalTo(EXPECTED_AGG_SECOND));
   }
 
   private SparkPipelineResult runAgain(SparkPipelineOptions options) {
@@ -159,7 +160,7 @@ public class ResumeFromCheckpointStreamingTest {
         "auto.offset.reset", "earliest"
     );
 
-    KafkaIO.Read<String, String> read = KafkaIO.read()
+    KafkaIO.Read<String, String> read = KafkaIO.<String, String>read()
         .withBootstrapServers(EMBEDDED_KAFKA_CLUSTER.getBrokerList())
         .withTopics(Collections.singletonList(TOPIC))
         .withKeyCoder(StringUtf8Coder.of())
