@@ -15,32 +15,11 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.sdk.transforms.windowing;
+package org.apache.beam.sdk.testing;
 
-import static org.junit.Assert.assertEquals;
-
-import org.joda.time.Instant;
-import org.junit.Test;
-import org.junit.runner.RunWith;
-import org.junit.runners.JUnit4;
+import org.apache.beam.sdk.util.state.SetState;
 
 /**
- * Tests the {@link AfterSynchronizedProcessingTime}.
+ * Category tag for validation tests which utilize {@link SetState}.
  */
-@RunWith(JUnit4.class)
-public class AfterSynchronizedProcessingTimeTest {
-
-  private Trigger underTest = AfterSynchronizedProcessingTime.ofFirstElement();
-
-  @Test
-  public void testFireDeadline() throws Exception {
-    assertEquals(BoundedWindow.TIMESTAMP_MAX_VALUE,
-        underTest.getWatermarkThatGuaranteesFiring(
-            new IntervalWindow(new Instant(0), new Instant(10))));
-  }
-
-  @Test
-  public void testContinuation() throws Exception {
-    assertEquals(underTest, underTest.getContinuationTrigger());
-  }
-}
+public interface UsesSetState {}
