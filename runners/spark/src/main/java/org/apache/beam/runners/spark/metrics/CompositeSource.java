@@ -16,23 +16,34 @@
  * limitations under the License.
  */
 
-package org.apache.beam.runners.spark.aggregators;
+package org.apache.beam.runners.spark.metrics;
 
-import org.junit.rules.ExternalResource;
+import com.codahale.metrics.MetricRegistry;
+import org.apache.spark.metrics.source.Source;
 
 
 /**
- * A rule that clears the {@link AggregatorsAccumulator}
- * which represents the Beam {@link org.apache.beam.sdk.transforms.Aggregator}s.
+ * Composite source made up of several {@link MetricRegistry} instances.
  */
-public class ClearAggregatorsRule extends ExternalResource {
+public class CompositeSource implements Source {
+  private final String name;
+  private final MetricRegistry metricRegistry;
 
-  @Override
-  protected void before() throws Throwable {
-    clearNamedAggregators();
+  public CompositeSource(final String name, MetricRegistry... metricRegistries) {
+    this.name = name;
+    this.metricRegistry = new MetricRegistry();
+    for (MetricRegistry metricRegistry : metricRegistries) {
+      this.metricRegistry.registerAll(metricRegistry);
+    }
   }
 
-  public void clearNamedAggregators() {
-    AggregatorsAccumulator.clear();
+  @Override
+  public String sourceName() {
+    return name;
+  }
+
+  @Override
+  public MetricRegistry metricRegistry() {
+    return metricRegistry;
   }
 }

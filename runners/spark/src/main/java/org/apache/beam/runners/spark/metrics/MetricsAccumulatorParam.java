@@ -16,23 +16,27 @@
  * limitations under the License.
  */
 
-package org.apache.beam.runners.spark.aggregators;
+package org.apache.beam.runners.spark.metrics;
 
-import org.junit.rules.ExternalResource;
+import org.apache.spark.AccumulatorParam;
 
 
 /**
- * A rule that clears the {@link AggregatorsAccumulator}
- * which represents the Beam {@link org.apache.beam.sdk.transforms.Aggregator}s.
+ * Metrics accumulator param.
  */
-public class ClearAggregatorsRule extends ExternalResource {
-
+class MetricsAccumulatorParam implements AccumulatorParam<SparkMetricsContainer> {
   @Override
-  protected void before() throws Throwable {
-    clearNamedAggregators();
+  public SparkMetricsContainer addAccumulator(SparkMetricsContainer c1, SparkMetricsContainer c2) {
+    return c1.update(c2);
   }
 
-  public void clearNamedAggregators() {
-    AggregatorsAccumulator.clear();
+  @Override
+  public SparkMetricsContainer addInPlace(SparkMetricsContainer c1, SparkMetricsContainer c2) {
+    return c1.update(c2);
+  }
+
+  @Override
+  public SparkMetricsContainer zero(SparkMetricsContainer initialValue) {
+    return new SparkMetricsContainer();
   }
 }
