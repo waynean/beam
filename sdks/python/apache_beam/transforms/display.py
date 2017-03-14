@@ -25,6 +25,7 @@ add static display data to a component, you can override the display_data
 method of the HasDisplayData class.
 
 Available classes:
+
 - HasDisplayData - Components that inherit from this class can have static
     display data shown in the UI.
 - DisplayDataItem - This class represents static display data elements.
@@ -159,6 +160,7 @@ class DisplayDataItem(object):
   display item belongs to.
   """
   typeDict = {str:'STRING',
+              unicode:'STRING',
               int:'INTEGER',
               float:'FLOAT',
               bool: 'BOOLEAN',

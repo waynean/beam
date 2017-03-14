@@ -158,7 +158,7 @@ class PipelineOptions(HasDisplayData):
     # Special methods which may be accessed before the object is
     # fully constructed (e.g. in unpickling).
     if name[:2] == name[-2:] == '__':
-      return object.__getattr__(self, name)
+      return object.__getattribute__(self, name)
     elif name in self._visible_option_list():
       return self._all_options.get(name, getattr(self._visible_options, name))
     else:
@@ -226,6 +226,20 @@ class TypeOptions(PipelineOptions):
                         help='Enable type checking at pipeline execution '
                         'time. NOTE: only supported with the '
                         'DirectRunner')
+
+
+class DirectOptions(PipelineOptions):
+  """DirectRunner-specific execution options."""
+
+  @classmethod
+  def _add_argparse_args(cls, parser):
+    parser.add_argument(
+        '--no_direct_runner_use_stacked_bundle',
+        action='store_false',
+        dest='direct_runner_use_stacked_bundle',
+        help='DirectRunner uses stacked WindowedValues within a Bundle for '
+        'memory optimization. Set --no_direct_runner_use_stacked_bundle to '
+        'avoid it.')
 
 
 class GoogleCloudOptions(PipelineOptions):

@@ -24,6 +24,7 @@ import logging
 from apache_beam import coders
 from apache_beam.io import filebasedsource
 from apache_beam.io import fileio
+from apache_beam.io import iobase
 from apache_beam.io.iobase import Read
 from apache_beam.io.iobase import Write
 from apache_beam.transforms import PTransform
@@ -116,6 +117,14 @@ class _TextSource(filebasedsource.FileBasedSource):
     start_offset = range_tracker.start_position()
     read_buffer = _TextSource.ReadBuffer('', 0)
 
+    next_record_start_position = -1
+
+    def split_points_unclaimed(stop_position):
+      return (0 if stop_position <= next_record_start_position
+              else iobase.RangeTracker.SPLIT_POINTS_UNKNOWN)
+
+    range_tracker.set_split_points_unclaimed_callback(split_points_unclaimed)
+
     with self.open_file(file_name) as file_to_read:
       position_after_skipping_header_lines = self._skip_lines(
           file_to_read, read_buffer,
@@ -153,10 +162,14 @@ class _TextSource(filebasedsource.FileBasedSource):
         if len(record) == 0 and num_bytes_to_next_record < 0:
           break
 
+        # Record separator must be larger than zero bytes.
+        assert num_bytes_to_next_record != 0
+        if num_bytes_to_next_record > 0:
+          next_record_start_position += num_bytes_to_next_record
+
         yield self._coder.decode(record)
         if num_bytes_to_next_record < 0:
           break
-        next_record_start_position += num_bytes_to_next_record
 
   def _find_separator_bounds(self, file_to_read, read_buffer):
     # Determines the start and end positions within 'read_buffer.data' of the
@@ -220,7 +233,7 @@ class _TextSource(filebasedsource.FileBasedSource):
 
   def _read_record(self, file_to_read, read_buffer):
     # Returns a tuple containing the current_record and number of bytes to the
-    # next record starting from 'self._next_position_in_buffer'. If EOF is
+    # next record starting from 'read_buffer.position'. If EOF is
     # reached, returns a tuple containing the current record and -1.
 
     if read_buffer.position > self._buffer_size:
@@ -333,10 +346,11 @@ class ReadFromText(PTransform):
   """A PTransform for reading text files.
 
   Parses a text file as newline-delimited elements, by default assuming
-  UTF-8 encoding. Supports newline delimiters '\n' and '\r\n'.
+  UTF-8 encoding. Supports newline delimiters '\\n' and '\\r\\n'.
 
   This implementation only supports reading text encoded using UTF-8 or ASCII.
-  This does not support other encodings such as UTF-16 or UTF-32."""
+  This does not support other encodings such as UTF-16 or UTF-32.
+  """
   def __init__(
       self,
       file_pattern=None,
@@ -351,22 +365,21 @@ class ReadFromText(PTransform):
 
     Args:
       file_pattern: The file path to read from as a local file path or a GCS
-        gs:// path. The path can contain glob characters (*, ?, and [...]
-        sets).
+        ``gs://`` path. The path can contain glob characters
+        ``(*, ?, and [...] sets)``.
       min_bundle_size: Minimum size of bundles that should be generated when
-                       splitting this source into bundles. See
-                       ``FileBasedSource`` for more details.
+        splitting this source into bundles. See ``FileBasedSource`` for more
+        details.
       compression_type: Used to handle compressed input files. Typical value
-          is CompressionTypes.AUTO, in which case the underlying file_path's
-          extension will be used to detect the compression.
+        is CompressionTypes.AUTO, in which case the underlying file_path's
+        extension will be used to detect the compression.
       strip_trailing_newlines: Indicates whether this source should remove
-                               the newline char in each line it reads before
-                               decoding that line.
+        the newline char in each line it reads before decoding that line.
       validate: flag to verify that the files exist during the pipeline
-                creation time.
+        creation time.
       skip_header_lines: Number of header lines to skip. Same number is skipped
-                         from each source file. Must be 0 or higher. Large
-                         number of skipped lines might impact performance.
+        from each source file. Must be 0 or higher. Large number of skipped
+        lines might impact performance.
       coder: Coder used to decode each line.
     """
 

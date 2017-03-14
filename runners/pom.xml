@@ -22,7 +22,7 @@
   <parent>
     <groupId>org.apache.beam</groupId>
     <artifactId>beam-parent</artifactId>
-    <version>0.6.0-SNAPSHOT</version>
+    <version>0.7.0-SNAPSHOT</version>
     <relativePath>../pom.xml</relativePath>
   </parent>
 
@@ -33,6 +33,7 @@
   <name>Apache Beam :: Runners</name>
 
   <modules>
+    <module>core-construction-java</module>
     <module>core-java</module>
     <module>direct-java</module>
     <module>flink</module>

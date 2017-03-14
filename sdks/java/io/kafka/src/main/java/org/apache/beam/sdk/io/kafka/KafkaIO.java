@@ -44,6 +44,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.NoSuchElementException;
 import java.util.Random;
+import java.util.Set;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -63,12 +64,14 @@ import org.apache.beam.sdk.io.UnboundedSource.CheckpointMark;
 import org.apache.beam.sdk.io.UnboundedSource.UnboundedReader;
 import org.apache.beam.sdk.io.kafka.KafkaCheckpointMark.PartitionMark;
 import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.options.ValueProvider;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.PTransform;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.SimpleFunction;
+import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.util.CoderUtils;
 import org.apache.beam.sdk.util.ExposedByteArrayInputStream;
 import org.apache.beam.sdk.values.KV;
@@ -98,7 +101,9 @@ import org.slf4j.LoggerFactory;
 
 /**
  * An unbounded source and a sink for <a href="http://kafka.apache.org/">Kafka</a> topics.
- * Kafka version 0.9 and above are supported.
+ * Kafka version 0.9 and 0.10 are supported. If you need a specific version of Kafka
+ * client(e.g. 0.9 for 0.9 servers, or 0.10 for security features), specify explicit
+ * kafka-client dependency.
  *
  * <h3>Reading from Kafka topics</h3>
  *
@@ -212,7 +217,7 @@ public class KafkaIO {
         .setTopicPartitions(new ArrayList<TopicPartition>())
         .setKeyCoder(ByteArrayCoder.of())
         .setValueCoder(ByteArrayCoder.of())
-        .setConsumerFactoryFn(Read.KAFKA_9_CONSUMER_FACTORY_FN)
+        .setConsumerFactoryFn(Read.KAFKA_CONSUMER_FACTORY_FN)
         .setConsumerConfig(Read.DEFAULT_CONSUMER_PROPERTIES)
         .setMaxNumRecords(Long.MAX_VALUE)
         .build();
@@ -228,7 +233,7 @@ public class KafkaIO {
     return new AutoValue_KafkaIO_Read.Builder<K, V>()
         .setTopics(new ArrayList<String>())
         .setTopicPartitions(new ArrayList<TopicPartition>())
-        .setConsumerFactoryFn(Read.KAFKA_9_CONSUMER_FACTORY_FN)
+        .setConsumerFactoryFn(Read.KAFKA_CONSUMER_FACTORY_FN)
         .setConsumerConfig(Read.DEFAULT_CONSUMER_PROPERTIES)
         .setMaxNumRecords(Long.MAX_VALUE)
         .build();
@@ -492,12 +497,33 @@ public class KafkaIO {
 
     // default Kafka 0.9 Consumer supplier.
     private static final SerializableFunction<Map<String, Object>, Consumer<byte[], byte[]>>
-      KAFKA_9_CONSUMER_FACTORY_FN =
+      KAFKA_CONSUMER_FACTORY_FN =
         new SerializableFunction<Map<String, Object>, Consumer<byte[], byte[]>>() {
           public Consumer<byte[], byte[]> apply(Map<String, Object> config) {
             return new KafkaConsumer<>(config);
           }
         };
+
+    @SuppressWarnings("unchecked")
+    @Override
+    public void populateDisplayData(DisplayData.Builder builder) {
+      super.populateDisplayData(builder);
+      List<String> topics = getTopics();
+      List<TopicPartition> topicPartitions = getTopicPartitions();
+      if (topics.size() > 0) {
+        builder.add(DisplayData.item("topics", Joiner.on(",").join(topics)).withLabel("Topic/s"));
+      } else if (topicPartitions.size() > 0) {
+        builder.add(DisplayData.item("topicPartitions", Joiner.on(",").join(topicPartitions))
+            .withLabel("Topic Partition/s"));
+      }
+      Set<String> ignoredConsumerPropertiesKeys = IGNORED_CONSUMER_PROPERTIES.keySet();
+      for (Map.Entry<String, Object> conf : getConsumerConfig().entrySet()) {
+        String key = conf.getKey();
+        if (!ignoredConsumerPropertiesKeys.contains(key)) {
+          builder.add(DisplayData.item(key, ValueProvider.StaticValueProvider.of(conf.getValue())));
+        }
+      }
+    }
   }
 
   /**
@@ -524,6 +550,12 @@ public class KafkaIO {
                   ctx.output(ctx.element().getKV());
                 }
               }));
+    }
+
+    @Override
+    public void populateDisplayData(DisplayData.Builder builder) {
+      super.populateDisplayData(builder);
+      read.populateDisplayData(builder);
     }
   }
 
@@ -712,6 +744,9 @@ public class KafkaIO {
 
     private static final long UNINITIALIZED_OFFSET = -1;
 
+    //Add SpEL instance to cover the interface difference of Kafka client
+    private transient ConsumerSpEL consumerSpEL;
+
     /** watermark before any records have been read. */
     private static Instant initialWatermark = new Instant(Long.MIN_VALUE);
 
@@ -851,9 +886,10 @@ public class KafkaIO {
 
     @Override
     public boolean start() throws IOException {
+      this.consumerSpEL = new ConsumerSpEL();
       Read<K, V> spec = source.spec;
       consumer = spec.getConsumerFactoryFn().apply(spec.getConsumerConfig());
-      consumer.assign(spec.getTopicPartitions());
+      consumerSpEL.evaluateAssign(consumer, spec.getTopicPartitions());
 
       for (PartitionState p : partitionStates) {
         if (p.nextOffset != UNINITIALIZED_OFFSET) {
@@ -889,7 +925,7 @@ public class KafkaIO {
       offsetConsumerConfig.put(ConsumerConfig.ENABLE_AUTO_COMMIT_CONFIG, false);
 
       offsetConsumer = spec.getConsumerFactoryFn().apply(offsetConsumerConfig);
-      offsetConsumer.assign(spec.getTopicPartitions());
+      consumerSpEL.evaluateAssign(offsetConsumer, spec.getTopicPartitions());
 
       offsetFetcherThread.scheduleAtFixedRate(
           new Runnable() {
@@ -987,7 +1023,7 @@ public class KafkaIO {
     private void updateLatestOffsets() {
       for (PartitionState p : partitionStates) {
         try {
-          offsetConsumer.seekToEnd(p.topicPartition);
+          consumerSpEL.evaluateSeek2End(offsetConsumer, p.topicPartition);
           long offset = offsetConsumer.position(p.topicPartition);
           p.setLatestOffset(offset);
         } catch (Exception e) {
@@ -1216,6 +1252,19 @@ public class KafkaIO {
         configForKeySerializer(), "Reserved for internal serializer",
         configForValueSerializer(), "Reserved for internal serializer"
      );
+
+    @Override
+    public void populateDisplayData(DisplayData.Builder builder) {
+      super.populateDisplayData(builder);
+      builder.addIfNotNull(DisplayData.item("topic", getTopic()).withLabel("Topic"));
+      Set<String> ignoredProducerPropertiesKeys = IGNORED_PRODUCER_PROPERTIES.keySet();
+      for (Map.Entry<String, Object> conf : getProducerConfig().entrySet()) {
+        String key = conf.getKey();
+        if (!ignoredProducerPropertiesKeys.contains(key)) {
+          builder.add(DisplayData.item(key, ValueProvider.StaticValueProvider.of(conf.getValue())));
+        }
+      }
+    }
   }
 
   /**
@@ -1241,6 +1290,12 @@ public class KafkaIO {
           }))
         .setCoder(KvCoder.of(new NullOnlyCoder<K>(), kvWriteTransform.getValueCoder()))
         .apply(kvWriteTransform);
+    }
+
+    @Override
+    public void populateDisplayData(DisplayData.Builder builder) {
+      super.populateDisplayData(builder);
+      kvWriteTransform.populateDisplayData(builder);
     }
   }
 

@@ -17,383 +17,320 @@
  */
 package org.apache.beam.runners.flink.translation.wrappers.streaming.state;
 
-import static com.google.common.base.Preconditions.checkNotNull;
-
+import com.google.common.collect.Lists;
+import java.nio.ByteBuffer;
+import java.util.Collections;
+import java.util.HashMap;
+import java.util.Map;
+import org.apache.beam.runners.core.StateInternals;
+import org.apache.beam.runners.core.StateNamespace;
+import org.apache.beam.runners.core.StateTag;
+import org.apache.beam.runners.flink.translation.types.CoderTypeInformation;
 import org.apache.beam.sdk.coders.Coder;
-import org.apache.beam.sdk.options.PipelineOptions;
+import org.apache.beam.sdk.coders.CoderException;
+import org.apache.beam.sdk.coders.InstantCoder;
 import org.apache.beam.sdk.transforms.Combine;
 import org.apache.beam.sdk.transforms.CombineWithContext;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.OutputTimeFn;
+import org.apache.beam.sdk.util.CoderUtils;
+import org.apache.beam.sdk.util.CombineContextFactory;
 import org.apache.beam.sdk.util.state.AccumulatorCombiningState;
 import org.apache.beam.sdk.util.state.BagState;
+import org.apache.beam.sdk.util.state.MapState;
 import org.apache.beam.sdk.util.state.ReadableState;
+import org.apache.beam.sdk.util.state.SetState;
 import org.apache.beam.sdk.util.state.State;
 import org.apache.beam.sdk.util.state.StateContext;
-import org.apache.beam.sdk.util.state.StateInternals;
-import org.apache.beam.sdk.util.state.StateNamespace;
-import org.apache.beam.sdk.util.state.StateNamespaces;
-import org.apache.beam.sdk.util.state.StateTable;
-import org.apache.beam.sdk.util.state.StateTag;
-import org.apache.beam.sdk.util.state.StateTags;
+import org.apache.beam.sdk.util.state.StateContexts;
 import org.apache.beam.sdk.util.state.ValueState;
 import org.apache.beam.sdk.util.state.WatermarkHoldState;
-import org.apache.beam.sdk.values.PCollectionView;
-
-import com.google.protobuf.ByteString;
-
-import org.apache.flink.util.InstantiationUtil;
+import org.apache.flink.api.common.state.ListStateDescriptor;
+import org.apache.flink.api.common.state.ValueStateDescriptor;
+import org.apache.flink.api.common.typeutils.base.StringSerializer;
+import org.apache.flink.runtime.state.KeyedStateBackend;
 import org.joda.time.Instant;
 
-import java.io.ByteArrayInputStream;
-import java.io.IOException;
-import java.util.ArrayList;
-import java.util.Arrays;
-import java.util.List;
-import java.util.Objects;
-
 /**
- * An implementation of the Beam {@link StateInternals}. This implementation simply keeps elements in memory.
- * This state is periodically checkpointed by Flink, for fault-tolerance.
+ * {@link StateInternals} that uses a Flink {@link KeyedStateBackend} to manage state.
  *
- * TODO: State should be rewritten to redirect to Flink per-key state so that coders and combiners don't need
- * to be serialized along with encoded values when snapshotting.
+ * <p>Note: In the Flink streaming runner the key is always encoded
+ * using an {@link Coder} and stored in a {@link ByteBuffer}.
  */
 public class FlinkStateInternals<K> implements StateInternals<K> {
 
-  private final K key;
+  private final KeyedStateBackend<ByteBuffer> flinkStateBackend;
+  private Coder<K> keyCoder;
 
-  private final Coder<K> keyCoder;
+  // on recovery, these will no be properly set because we don't
+  // know which watermark hold states there are in the Flink State Backend
+  private final Map<String, Instant> watermarkHolds = new HashMap<>();
 
-  private final Coder<? extends BoundedWindow> windowCoder;
-
-  private final OutputTimeFn<? super BoundedWindow> outputTimeFn;
-
-  private Instant watermarkHoldAccessor;
-
-  public FlinkStateInternals(K key,
-                             Coder<K> keyCoder,
-                             Coder<? extends BoundedWindow> windowCoder,
-                             OutputTimeFn<? super BoundedWindow> outputTimeFn) {
-    this.key = key;
+  public FlinkStateInternals(KeyedStateBackend<ByteBuffer> flinkStateBackend, Coder<K> keyCoder) {
+    this.flinkStateBackend = flinkStateBackend;
     this.keyCoder = keyCoder;
-    this.windowCoder = windowCoder;
-    this.outputTimeFn = outputTimeFn;
-  }
-
-  public Instant getWatermarkHold() {
-    return watermarkHoldAccessor;
   }
 
   /**
-   * This is the interface state has to implement in order for it to be fault tolerant when
-   * executed by the FlinkRunner.
+   * Returns the minimum over all watermark holds.
    */
-  private interface CheckpointableIF {
-
-    boolean shouldPersist();
-
-    void persistState(StateCheckpointWriter checkpointBuilder) throws IOException;
-  }
-
-  protected final StateTable<K> inMemoryState = new StateTable<K>() {
-    @Override
-    protected StateTag.StateBinder binderForNamespace(final StateNamespace namespace, final StateContext<?> c) {
-      return new StateTag.StateBinder<K>() {
-
-        @Override
-        public <T> ValueState<T> bindValue(StateTag<? super K, ValueState<T>> address, Coder<T> coder) {
-          return new FlinkInMemoryValue<>(encodeKey(namespace, address), coder);
-        }
-
-        @Override
-        public <T> BagState<T> bindBag(StateTag<? super K, BagState<T>> address, Coder<T> elemCoder) {
-          return new FlinkInMemoryBag<>(encodeKey(namespace, address), elemCoder);
-        }
-
-        @Override
-        public <InputT, AccumT, OutputT> AccumulatorCombiningState<InputT, AccumT, OutputT> bindCombiningValue(
-            StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address,
-            Coder<AccumT> accumCoder, Combine.CombineFn<InputT, AccumT, OutputT> combineFn) {
-          return new FlinkInMemoryKeyedCombiningValue<>(encodeKey(namespace, address), combineFn, accumCoder, c);
-        }
-
-        @Override
-        public <InputT, AccumT, OutputT> AccumulatorCombiningState<InputT, AccumT, OutputT> bindKeyedCombiningValue(
-            StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address,
-            Coder<AccumT> accumCoder,
-            Combine.KeyedCombineFn<? super K, InputT, AccumT, OutputT> combineFn) {
-          return new FlinkInMemoryKeyedCombiningValue<>(encodeKey(namespace, address), combineFn, accumCoder, c);
-        }
-
-        @Override
-        public <InputT, AccumT, OutputT> AccumulatorCombiningState<InputT, AccumT, OutputT> bindKeyedCombiningValueWithContext(
-            StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address,
-            Coder<AccumT> accumCoder,
-            CombineWithContext.KeyedCombineFnWithContext<? super K, InputT, AccumT, OutputT> combineFn) {
-          return new FlinkInMemoryKeyedCombiningValue<>(encodeKey(namespace, address), combineFn, accumCoder, c);
-        }
-
-        @Override
-        public <W extends BoundedWindow> WatermarkHoldState<W> bindWatermark(StateTag<? super K, WatermarkHoldState<W>> address, OutputTimeFn<? super W> outputTimeFn) {
-          return new FlinkWatermarkHoldStateImpl<>(encodeKey(namespace, address), outputTimeFn);
-        }
-      };
+  public Instant watermarkHold() {
+    long min = Long.MAX_VALUE;
+    for (Instant hold: watermarkHolds.values()) {
+      min = Math.min(min, hold.getMillis());
     }
-  };
+    return new Instant(min);
+  }
 
   @Override
   public K getKey() {
-    return key;
-  }
-
-  @Override
-  public <StateT extends State> StateT state(StateNamespace namespace, StateTag<? super K, StateT> address) {
-    return inMemoryState.get(namespace, address, null);
-  }
-
-  @Override
-  public <T extends State> T state(StateNamespace namespace, StateTag<? super K, T> address, StateContext<?> c) {
-    return inMemoryState.get(namespace, address, c);
-  }
-
-  public void persistState(StateCheckpointWriter checkpointBuilder) throws IOException {
-    checkpointBuilder.writeInt(getNoOfElements());
-
-    for (State location : inMemoryState.values()) {
-      if (!(location instanceof CheckpointableIF)) {
-        throw new IllegalStateException(String.format(
-            "%s wasn't created by %s -- unable to persist it",
-            location.getClass().getSimpleName(),
-            getClass().getSimpleName()));
-      }
-      ((CheckpointableIF) location).persistState(checkpointBuilder);
-    }
-  }
-
-  public void restoreState(StateCheckpointReader checkpointReader, ClassLoader loader)
-      throws IOException, ClassNotFoundException {
-
-    // the number of elements to read.
-    int noOfElements = checkpointReader.getInt();
-    for (int i = 0; i < noOfElements; i++) {
-      decodeState(checkpointReader, loader);
-    }
-  }
-
-  /**
-   * We remove the first character which encodes the type of the stateTag ('s' for system
-   * and 'u' for user). For more details check out the source of
-   * {@link StateTags.StateTagBase#getId()}.
-   */
-  private void decodeState(StateCheckpointReader reader, ClassLoader loader)
-      throws IOException, ClassNotFoundException {
-
-    StateType stateItemType = StateType.deserialize(reader);
-    ByteString stateKey = reader.getTag();
-
-    // first decode the namespace and the tagId...
-    String[] namespaceAndTag = stateKey.toStringUtf8().split("\\+");
-    if (namespaceAndTag.length != 2) {
-      throw new IllegalArgumentException("Invalid stateKey " + stateKey.toString() + ".");
-    }
-    StateNamespace namespace = StateNamespaces.fromString(namespaceAndTag[0], windowCoder);
-
-    // ... decide if it is a system or user stateTag...
-    char ownerTag = namespaceAndTag[1].charAt(0);
-    if (ownerTag != 's' && ownerTag != 'u') {
-      throw new RuntimeException("Invalid StateTag name.");
-    }
-    boolean isSystemTag = ownerTag == 's';
-    String tagId = namespaceAndTag[1].substring(1);
-
-    // ...then decode the coder (if there is one)...
-    Coder<?> coder = null;
-    switch (stateItemType) {
-      case VALUE:
-      case LIST:
-      case ACCUMULATOR:
-        ByteString coderBytes = reader.getData();
-        coder = InstantiationUtil.deserializeObject(coderBytes.toByteArray(), loader);
-        break;
-      case WATERMARK:
-        break;
-    }
-
-    // ...then decode the combiner function (if there is one)...
-    CombineWithContext.KeyedCombineFnWithContext<? super K, ?, ?, ?> combineFn = null;
-    switch (stateItemType) {
-      case ACCUMULATOR:
-        ByteString combinerBytes = reader.getData();
-        combineFn = InstantiationUtil.deserializeObject(combinerBytes.toByteArray(), loader);
-        break;
-      case VALUE:
-      case LIST:
-      case WATERMARK:
-        break;
-    }
-
-    //... and finally, depending on the type of the state being decoded,
-    // 1) create the adequate stateTag,
-    // 2) create the state container,
-    // 3) restore the actual content.
-    switch (stateItemType) {
-      case VALUE: {
-        StateTag stateTag = StateTags.value(tagId, coder);
-        stateTag = isSystemTag ? StateTags.makeSystemTagInternal(stateTag) : stateTag;
-        @SuppressWarnings("unchecked")
-        FlinkInMemoryValue<?> value = (FlinkInMemoryValue<?>) inMemoryState.get(namespace, stateTag, null);
-        value.restoreState(reader);
-        break;
-      }
-      case WATERMARK: {
-        @SuppressWarnings("unchecked")
-        StateTag<Object, WatermarkHoldState<BoundedWindow>> stateTag = StateTags.watermarkStateInternal(tagId, outputTimeFn);
-        stateTag = isSystemTag ? StateTags.makeSystemTagInternal(stateTag) : stateTag;
-        @SuppressWarnings("unchecked")
-        FlinkWatermarkHoldStateImpl<?> watermark = (FlinkWatermarkHoldStateImpl<?>) inMemoryState.get(namespace, stateTag, null);
-        watermark.restoreState(reader);
-        break;
-      }
-      case LIST: {
-        StateTag stateTag = StateTags.bag(tagId, coder);
-        stateTag = isSystemTag ? StateTags.makeSystemTagInternal(stateTag) : stateTag;
-        FlinkInMemoryBag<?> bag = (FlinkInMemoryBag<?>) inMemoryState.get(namespace, stateTag, null);
-        bag.restoreState(reader);
-        break;
-      }
-      case ACCUMULATOR: {
-        @SuppressWarnings("unchecked")
-        StateTag<K, AccumulatorCombiningState<?, ?, ?>> stateTag = StateTags.keyedCombiningValueWithContext(tagId, (Coder) coder, combineFn);
-        stateTag = isSystemTag ? StateTags.makeSystemTagInternal(stateTag) : stateTag;
-        @SuppressWarnings("unchecked")
-        FlinkInMemoryKeyedCombiningValue<?, ?, ?> combiningValue =
-            (FlinkInMemoryKeyedCombiningValue<?, ?, ?>) inMemoryState.get(namespace, stateTag, null);
-        combiningValue.restoreState(reader);
-        break;
-      }
-      default:
-        throw new RuntimeException("Unknown State Type " + stateItemType + ".");
-    }
-  }
-
-  private ByteString encodeKey(StateNamespace namespace, StateTag<? super K, ?> address) {
-    StringBuilder sb = new StringBuilder();
+    ByteBuffer keyBytes = flinkStateBackend.getCurrentKey();
     try {
-      namespace.appendTo(sb);
-      sb.append('+');
-      address.appendTo(sb);
-    } catch (IOException e) {
-      throw new RuntimeException(e);
+      return CoderUtils.decodeFromByteArray(keyCoder, keyBytes.array());
+    } catch (CoderException e) {
+      throw new RuntimeException("Error decoding key.", e);
     }
-    return ByteString.copyFromUtf8(sb.toString());
   }
 
-  private int getNoOfElements() {
-    int noOfElements = 0;
-    for (State state : inMemoryState.values()) {
-      if (!(state instanceof CheckpointableIF)) {
-        throw new RuntimeException("State Implementations used by the " +
-            "Flink Dataflow Runner should implement the CheckpointableIF interface.");
-      }
+  @Override
+  public <T extends State> T state(
+      final StateNamespace namespace,
+      StateTag<? super K, T> address) {
 
-      if (((CheckpointableIF) state).shouldPersist()) {
-        noOfElements++;
-      }
-    }
-    return noOfElements;
+    return state(namespace, address, StateContexts.nullContext());
   }
 
-  private final class FlinkInMemoryValue<T> implements ValueState<T>, CheckpointableIF {
+  @Override
+  public <T extends State> T state(
+      final StateNamespace namespace,
+      StateTag<? super K, T> address,
+      final StateContext<?> context) {
 
-    private final ByteString stateKey;
-    private final Coder<T> elemCoder;
+    return address.bind(new StateTag.StateBinder<K>() {
 
-    private T value = null;
+      @Override
+      public <T> ValueState<T> bindValue(
+          StateTag<? super K, ValueState<T>> address,
+          Coder<T> coder) {
 
-    public FlinkInMemoryValue(ByteString stateKey, Coder<T> elemCoder) {
-      this.stateKey = stateKey;
-      this.elemCoder = elemCoder;
-    }
+        return new FlinkValueState<>(flinkStateBackend, address, namespace, coder);
+      }
 
-    @Override
-    public void clear() {
-      value = null;
+      @Override
+      public <T> BagState<T> bindBag(
+          StateTag<? super K, BagState<T>> address,
+          Coder<T> elemCoder) {
+
+        return new FlinkBagState<>(flinkStateBackend, address, namespace, elemCoder);
+      }
+
+      @Override
+      public <T> SetState<T> bindSet(
+          StateTag<? super K, SetState<T>> address,
+          Coder<T> elemCoder) {
+        throw new UnsupportedOperationException(
+            String.format("%s is not supported", SetState.class.getSimpleName()));
+      }
+
+      @Override
+      public <KeyT, ValueT> MapState<KeyT, ValueT> bindMap(
+          StateTag<? super K, MapState<KeyT, ValueT>> spec,
+          Coder<KeyT> mapKeyCoder, Coder<ValueT> mapValueCoder) {
+        throw new UnsupportedOperationException(
+            String.format("%s is not supported", MapState.class.getSimpleName()));
+      }
+
+      @Override
+      public <InputT, AccumT, OutputT>
+          AccumulatorCombiningState<InputT, AccumT, OutputT>
+      bindCombiningValue(
+          StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address,
+          Coder<AccumT> accumCoder,
+          Combine.CombineFn<InputT, AccumT, OutputT> combineFn) {
+
+        return new FlinkAccumulatorCombiningState<>(
+            flinkStateBackend, address, combineFn, namespace, accumCoder);
+      }
+
+      @Override
+      public <InputT, AccumT, OutputT>
+          AccumulatorCombiningState<InputT, AccumT, OutputT> bindKeyedCombiningValue(
+          StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address,
+          Coder<AccumT> accumCoder,
+          final Combine.KeyedCombineFn<? super K, InputT, AccumT, OutputT> combineFn) {
+        return new FlinkKeyedAccumulatorCombiningState<>(
+            flinkStateBackend,
+            address,
+            combineFn,
+            namespace,
+            accumCoder,
+            FlinkStateInternals.this);
+      }
+
+      @Override
+      public <InputT, AccumT, OutputT>
+          AccumulatorCombiningState<InputT, AccumT, OutputT> bindKeyedCombiningValueWithContext(
+          StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address,
+          Coder<AccumT> accumCoder,
+          CombineWithContext.KeyedCombineFnWithContext<
+              ? super K, InputT, AccumT, OutputT> combineFn) {
+        return new FlinkAccumulatorCombiningStateWithContext<>(
+            flinkStateBackend,
+            address,
+            combineFn,
+            namespace,
+            accumCoder,
+            FlinkStateInternals.this,
+            CombineContextFactory.createFromStateContext(context));
+      }
+
+      @Override
+      public <W extends BoundedWindow> WatermarkHoldState<W> bindWatermark(
+          StateTag<? super K, WatermarkHoldState<W>> address,
+          OutputTimeFn<? super W> outputTimeFn) {
+
+        return new FlinkWatermarkHoldState<>(
+            flinkStateBackend, FlinkStateInternals.this, address, namespace, outputTimeFn);
+      }
+    });
+  }
+
+  private static class FlinkValueState<K, T> implements ValueState<T> {
+
+    private final StateNamespace namespace;
+    private final StateTag<? super K, ValueState<T>> address;
+    private final ValueStateDescriptor<T> flinkStateDescriptor;
+    private final KeyedStateBackend<ByteBuffer> flinkStateBackend;
+
+    FlinkValueState(
+        KeyedStateBackend<ByteBuffer> flinkStateBackend,
+        StateTag<? super K, ValueState<T>> address,
+        StateNamespace namespace,
+        Coder<T> coder) {
+
+      this.namespace = namespace;
+      this.address = address;
+      this.flinkStateBackend = flinkStateBackend;
+
+      CoderTypeInformation<T> typeInfo = new CoderTypeInformation<>(coder);
+
+      flinkStateDescriptor = new ValueStateDescriptor<>(address.getId(), typeInfo, null);
     }
 
     @Override
     public void write(T input) {
-      this.value = input;
-    }
-
-    @Override
-    public T read() {
-      return value;
+      try {
+        flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).update(input);
+      } catch (Exception e) {
+        throw new RuntimeException("Error updating state.", e);
+      }
     }
 
     @Override
     public ValueState<T> readLater() {
-      // Ignore
       return this;
     }
 
     @Override
-    public boolean shouldPersist() {
-      return value != null;
-    }
-
-    @Override
-    public void persistState(StateCheckpointWriter checkpointBuilder) throws IOException {
-      if (value != null) {
-        // serialize the coder.
-        byte[] coder = InstantiationUtil.serializeObject(elemCoder);
-
-        // encode the value into a ByteString
-        ByteString.Output stream = ByteString.newOutput();
-        elemCoder.encode(value, stream, Coder.Context.OUTER);
-        ByteString data = stream.toByteString();
-
-        checkpointBuilder.addValueBuilder()
-          .setTag(stateKey)
-          .setData(coder)
-          .setData(data);
+    public T read() {
+      try {
+        return flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).value();
+      } catch (Exception e) {
+        throw new RuntimeException("Error reading state.", e);
       }
-    }
-
-    public void restoreState(StateCheckpointReader checkpointReader) throws IOException {
-      ByteString valueContent = checkpointReader.getData();
-      T outValue = elemCoder.decode(new ByteArrayInputStream(valueContent.toByteArray()), Coder.Context.OUTER);
-      write(outValue);
-    }
-  }
-
-  private final class FlinkWatermarkHoldStateImpl<W extends BoundedWindow>
-      implements WatermarkHoldState<W>, CheckpointableIF {
-
-    private final ByteString stateKey;
-
-    private Instant minimumHold = null;
-
-    private OutputTimeFn<? super W> outputTimeFn;
-
-    public FlinkWatermarkHoldStateImpl(ByteString stateKey, OutputTimeFn<? super W> outputTimeFn) {
-      this.stateKey = stateKey;
-      this.outputTimeFn = outputTimeFn;
     }
 
     @Override
     public void clear() {
-      // Even though we're clearing we can't remove this from the in-memory state map, since
-      // other users may already have a handle on this WatermarkBagInternal.
-      minimumHold = null;
-      watermarkHoldAccessor = null;
+      try {
+        flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).clear();
+      } catch (Exception e) {
+        throw new RuntimeException("Error clearing state.", e);
+      }
     }
 
     @Override
-    public void add(Instant watermarkHold) {
-      if (minimumHold == null || minimumHold.isAfter(watermarkHold)) {
-        watermarkHoldAccessor = watermarkHold;
-        minimumHold = watermarkHold;
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+
+      FlinkValueState<?, ?> that = (FlinkValueState<?, ?>) o;
+
+      return namespace.equals(that.namespace) && address.equals(that.address);
+
+    }
+
+    @Override
+    public int hashCode() {
+      int result = namespace.hashCode();
+      result = 31 * result + address.hashCode();
+      return result;
+    }
+  }
+
+  private static class FlinkBagState<K, T> implements BagState<T> {
+
+    private final StateNamespace namespace;
+    private final StateTag<? super K, BagState<T>> address;
+    private final ListStateDescriptor<T> flinkStateDescriptor;
+    private final KeyedStateBackend<ByteBuffer> flinkStateBackend;
+
+    FlinkBagState(
+        KeyedStateBackend<ByteBuffer> flinkStateBackend,
+        StateTag<? super K, BagState<T>> address,
+        StateNamespace namespace,
+        Coder<T> coder) {
+
+      this.namespace = namespace;
+      this.address = address;
+      this.flinkStateBackend = flinkStateBackend;
+
+      CoderTypeInformation<T> typeInfo = new CoderTypeInformation<>(coder);
+
+      flinkStateDescriptor = new ListStateDescriptor<>(address.getId(), typeInfo);
+    }
+
+    @Override
+    public void add(T input) {
+      try {
+        flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).add(input);
+      } catch (Exception e) {
+        throw new RuntimeException("Error adding to bag state.", e);
+      }
+    }
+
+    @Override
+    public BagState<T> readLater() {
+      return this;
+    }
+
+    @Override
+    public Iterable<T> read() {
+      try {
+        Iterable<T> result = flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).get();
+
+        return result != null ? result : Collections.<T>emptyList();
+      } catch (Exception e) {
+        throw new RuntimeException("Error reading state.", e);
       }
     }
 
@@ -402,15 +339,601 @@ public class FlinkStateInternals<K> implements StateInternals<K> {
       return new ReadableState<Boolean>() {
         @Override
         public Boolean read() {
-          return minimumHold == null;
+          try {
+            Iterable<T> result = flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor).get();
+            return result == null;
+          } catch (Exception e) {
+            throw new RuntimeException("Error reading state.", e);
+          }
+
         }
 
         @Override
         public ReadableState<Boolean> readLater() {
-          // Ignore
           return this;
         }
       };
+    }
+
+    @Override
+    public void clear() {
+      try {
+        flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).clear();
+      } catch (Exception e) {
+        throw new RuntimeException("Error clearing state.", e);
+      }
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+
+      FlinkBagState<?, ?> that = (FlinkBagState<?, ?>) o;
+
+      return namespace.equals(that.namespace) && address.equals(that.address);
+
+    }
+
+    @Override
+    public int hashCode() {
+      int result = namespace.hashCode();
+      result = 31 * result + address.hashCode();
+      return result;
+    }
+  }
+
+  private static class FlinkAccumulatorCombiningState<K, InputT, AccumT, OutputT>
+      implements AccumulatorCombiningState<InputT, AccumT, OutputT> {
+
+    private final StateNamespace namespace;
+    private final StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address;
+    private final Combine.CombineFn<InputT, AccumT, OutputT> combineFn;
+    private final ValueStateDescriptor<AccumT> flinkStateDescriptor;
+    private final KeyedStateBackend<ByteBuffer> flinkStateBackend;
+
+    FlinkAccumulatorCombiningState(
+        KeyedStateBackend<ByteBuffer> flinkStateBackend,
+        StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address,
+        Combine.CombineFn<InputT, AccumT, OutputT> combineFn,
+        StateNamespace namespace,
+        Coder<AccumT> accumCoder) {
+
+      this.namespace = namespace;
+      this.address = address;
+      this.combineFn = combineFn;
+      this.flinkStateBackend = flinkStateBackend;
+
+      CoderTypeInformation<AccumT> typeInfo = new CoderTypeInformation<>(accumCoder);
+
+      flinkStateDescriptor = new ValueStateDescriptor<>(address.getId(), typeInfo, null);
+    }
+
+    @Override
+    public AccumulatorCombiningState<InputT, AccumT, OutputT> readLater() {
+      return this;
+    }
+
+    @Override
+    public void add(InputT value) {
+      try {
+        org.apache.flink.api.common.state.ValueState<AccumT> state =
+            flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor);
+
+        AccumT current = state.value();
+        if (current == null) {
+          current = combineFn.createAccumulator();
+        }
+        current = combineFn.addInput(current, value);
+        state.update(current);
+      } catch (Exception e) {
+        throw new RuntimeException("Error adding to state." , e);
+      }
+    }
+
+    @Override
+    public void addAccum(AccumT accum) {
+      try {
+        org.apache.flink.api.common.state.ValueState<AccumT> state =
+            flinkStateBackend.getPartitionedState(
+              namespace.stringKey(),
+              StringSerializer.INSTANCE,
+              flinkStateDescriptor);
+
+        AccumT current = state.value();
+        if (current == null) {
+          state.update(accum);
+        } else {
+          current = combineFn.mergeAccumulators(Lists.newArrayList(current, accum));
+          state.update(current);
+        }
+      } catch (Exception e) {
+        throw new RuntimeException("Error adding to state.", e);
+      }
+    }
+
+    @Override
+    public AccumT getAccum() {
+      try {
+        return flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).value();
+      } catch (Exception e) {
+        throw new RuntimeException("Error reading state.", e);
+      }
+    }
+
+    @Override
+    public AccumT mergeAccumulators(Iterable<AccumT> accumulators) {
+      return combineFn.mergeAccumulators(accumulators);
+    }
+
+    @Override
+    public OutputT read() {
+      try {
+        org.apache.flink.api.common.state.ValueState<AccumT> state =
+            flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor);
+
+        AccumT accum = state.value();
+        if (accum != null) {
+          return combineFn.extractOutput(accum);
+        } else {
+          return combineFn.extractOutput(combineFn.createAccumulator());
+        }
+      } catch (Exception e) {
+        throw new RuntimeException("Error reading state.", e);
+      }
+    }
+
+    @Override
+    public ReadableState<Boolean> isEmpty() {
+      return new ReadableState<Boolean>() {
+        @Override
+        public Boolean read() {
+          try {
+            return flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor).value() == null;
+          } catch (Exception e) {
+            throw new RuntimeException("Error reading state.", e);
+          }
+
+        }
+
+        @Override
+        public ReadableState<Boolean> readLater() {
+          return this;
+        }
+      };
+    }
+
+    @Override
+    public void clear() {
+      try {
+        flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).clear();
+      } catch (Exception e) {
+        throw new RuntimeException("Error clearing state.", e);
+      }
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+
+      FlinkAccumulatorCombiningState<?, ?, ?, ?> that =
+          (FlinkAccumulatorCombiningState<?, ?, ?, ?>) o;
+
+      return namespace.equals(that.namespace) && address.equals(that.address);
+
+    }
+
+    @Override
+    public int hashCode() {
+      int result = namespace.hashCode();
+      result = 31 * result + address.hashCode();
+      return result;
+    }
+  }
+
+  private static class FlinkKeyedAccumulatorCombiningState<K, InputT, AccumT, OutputT>
+      implements AccumulatorCombiningState<InputT, AccumT, OutputT> {
+
+    private final StateNamespace namespace;
+    private final StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address;
+    private final Combine.KeyedCombineFn<? super K, InputT, AccumT, OutputT> combineFn;
+    private final ValueStateDescriptor<AccumT> flinkStateDescriptor;
+    private final KeyedStateBackend<ByteBuffer> flinkStateBackend;
+    private final FlinkStateInternals<K> flinkStateInternals;
+
+    FlinkKeyedAccumulatorCombiningState(
+        KeyedStateBackend<ByteBuffer> flinkStateBackend,
+        StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address,
+        Combine.KeyedCombineFn<? super K, InputT, AccumT, OutputT> combineFn,
+        StateNamespace namespace,
+        Coder<AccumT> accumCoder,
+        FlinkStateInternals<K> flinkStateInternals) {
+
+      this.namespace = namespace;
+      this.address = address;
+      this.combineFn = combineFn;
+      this.flinkStateBackend = flinkStateBackend;
+      this.flinkStateInternals = flinkStateInternals;
+
+      CoderTypeInformation<AccumT> typeInfo = new CoderTypeInformation<>(accumCoder);
+
+      flinkStateDescriptor = new ValueStateDescriptor<>(address.getId(), typeInfo, null);
+    }
+
+    @Override
+    public AccumulatorCombiningState<InputT, AccumT, OutputT> readLater() {
+      return this;
+    }
+
+    @Override
+    public void add(InputT value) {
+      try {
+        org.apache.flink.api.common.state.ValueState<AccumT> state =
+            flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor);
+
+        AccumT current = state.value();
+        if (current == null) {
+          current = combineFn.createAccumulator(flinkStateInternals.getKey());
+        }
+        current = combineFn.addInput(flinkStateInternals.getKey(), current, value);
+        state.update(current);
+      } catch (Exception e) {
+        throw new RuntimeException("Error adding to state." , e);
+      }
+    }
+
+    @Override
+    public void addAccum(AccumT accum) {
+      try {
+        org.apache.flink.api.common.state.ValueState<AccumT> state =
+            flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor);
+
+        AccumT current = state.value();
+        if (current == null) {
+          state.update(accum);
+        } else {
+          current = combineFn.mergeAccumulators(
+              flinkStateInternals.getKey(),
+              Lists.newArrayList(current, accum));
+          state.update(current);
+        }
+      } catch (Exception e) {
+        throw new RuntimeException("Error adding to state.", e);
+      }
+    }
+
+    @Override
+    public AccumT getAccum() {
+      try {
+        return flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).value();
+      } catch (Exception e) {
+        throw new RuntimeException("Error reading state.", e);
+      }
+    }
+
+    @Override
+    public AccumT mergeAccumulators(Iterable<AccumT> accumulators) {
+      return combineFn.mergeAccumulators(flinkStateInternals.getKey(), accumulators);
+    }
+
+    @Override
+    public OutputT read() {
+      try {
+        org.apache.flink.api.common.state.ValueState<AccumT> state =
+            flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor);
+
+        AccumT accum = state.value();
+        if (accum != null) {
+          return combineFn.extractOutput(flinkStateInternals.getKey(), accum);
+        } else {
+          return combineFn.extractOutput(
+              flinkStateInternals.getKey(),
+              combineFn.createAccumulator(flinkStateInternals.getKey()));
+        }
+      } catch (Exception e) {
+        throw new RuntimeException("Error reading state.", e);
+      }
+    }
+
+    @Override
+    public ReadableState<Boolean> isEmpty() {
+      return new ReadableState<Boolean>() {
+        @Override
+        public Boolean read() {
+          try {
+            return flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor).value() == null;
+          } catch (Exception e) {
+            throw new RuntimeException("Error reading state.", e);
+          }
+
+        }
+
+        @Override
+        public ReadableState<Boolean> readLater() {
+          return this;
+        }
+      };
+    }
+
+    @Override
+    public void clear() {
+      try {
+        flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).clear();
+      } catch (Exception e) {
+        throw new RuntimeException("Error clearing state.", e);
+      }
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+
+      FlinkKeyedAccumulatorCombiningState<?, ?, ?, ?> that =
+          (FlinkKeyedAccumulatorCombiningState<?, ?, ?, ?>) o;
+
+      return namespace.equals(that.namespace) && address.equals(that.address);
+
+    }
+
+    @Override
+    public int hashCode() {
+      int result = namespace.hashCode();
+      result = 31 * result + address.hashCode();
+      return result;
+    }
+  }
+
+  private static class FlinkAccumulatorCombiningStateWithContext<K, InputT, AccumT, OutputT>
+      implements AccumulatorCombiningState<InputT, AccumT, OutputT> {
+
+    private final StateNamespace namespace;
+    private final StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address;
+    private final CombineWithContext.KeyedCombineFnWithContext<
+        ? super K, InputT, AccumT, OutputT> combineFn;
+    private final ValueStateDescriptor<AccumT> flinkStateDescriptor;
+    private final KeyedStateBackend<ByteBuffer> flinkStateBackend;
+    private final FlinkStateInternals<K> flinkStateInternals;
+    private final CombineWithContext.Context context;
+
+    FlinkAccumulatorCombiningStateWithContext(
+        KeyedStateBackend<ByteBuffer> flinkStateBackend,
+        StateTag<? super K, AccumulatorCombiningState<InputT, AccumT, OutputT>> address,
+        CombineWithContext.KeyedCombineFnWithContext<
+            ? super K, InputT, AccumT, OutputT> combineFn,
+        StateNamespace namespace,
+        Coder<AccumT> accumCoder,
+        FlinkStateInternals<K> flinkStateInternals,
+        CombineWithContext.Context context) {
+
+      this.namespace = namespace;
+      this.address = address;
+      this.combineFn = combineFn;
+      this.flinkStateBackend = flinkStateBackend;
+      this.flinkStateInternals = flinkStateInternals;
+      this.context = context;
+
+      CoderTypeInformation<AccumT> typeInfo = new CoderTypeInformation<>(accumCoder);
+
+      flinkStateDescriptor = new ValueStateDescriptor<>(address.getId(), typeInfo, null);
+    }
+
+    @Override
+    public AccumulatorCombiningState<InputT, AccumT, OutputT> readLater() {
+      return this;
+    }
+
+    @Override
+    public void add(InputT value) {
+      try {
+        org.apache.flink.api.common.state.ValueState<AccumT> state =
+            flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor);
+
+        AccumT current = state.value();
+        if (current == null) {
+          current = combineFn.createAccumulator(flinkStateInternals.getKey(), context);
+        }
+        current = combineFn.addInput(flinkStateInternals.getKey(), current, value, context);
+        state.update(current);
+      } catch (Exception e) {
+        throw new RuntimeException("Error adding to state." , e);
+      }
+    }
+
+    @Override
+    public void addAccum(AccumT accum) {
+      try {
+        org.apache.flink.api.common.state.ValueState<AccumT> state =
+            flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor);
+
+        AccumT current = state.value();
+        if (current == null) {
+          state.update(accum);
+        } else {
+          current = combineFn.mergeAccumulators(
+              flinkStateInternals.getKey(),
+              Lists.newArrayList(current, accum),
+              context);
+          state.update(current);
+        }
+      } catch (Exception e) {
+        throw new RuntimeException("Error adding to state.", e);
+      }
+    }
+
+    @Override
+    public AccumT getAccum() {
+      try {
+        return flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).value();
+      } catch (Exception e) {
+        throw new RuntimeException("Error reading state.", e);
+      }
+    }
+
+    @Override
+    public AccumT mergeAccumulators(Iterable<AccumT> accumulators) {
+      return combineFn.mergeAccumulators(flinkStateInternals.getKey(), accumulators, context);
+    }
+
+    @Override
+    public OutputT read() {
+      try {
+        org.apache.flink.api.common.state.ValueState<AccumT> state =
+            flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor);
+
+        AccumT accum = state.value();
+        return combineFn.extractOutput(flinkStateInternals.getKey(), accum, context);
+      } catch (Exception e) {
+        throw new RuntimeException("Error reading state.", e);
+      }
+    }
+
+    @Override
+    public ReadableState<Boolean> isEmpty() {
+      return new ReadableState<Boolean>() {
+        @Override
+        public Boolean read() {
+          try {
+            return flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor).value() == null;
+          } catch (Exception e) {
+            throw new RuntimeException("Error reading state.", e);
+          }
+
+        }
+
+        @Override
+        public ReadableState<Boolean> readLater() {
+          return this;
+        }
+      };
+    }
+
+    @Override
+    public void clear() {
+      try {
+        flinkStateBackend.getPartitionedState(
+            namespace.stringKey(),
+            StringSerializer.INSTANCE,
+            flinkStateDescriptor).clear();
+      } catch (Exception e) {
+        throw new RuntimeException("Error clearing state.", e);
+      }
+    }
+
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
+      }
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+
+      FlinkAccumulatorCombiningStateWithContext<?, ?, ?, ?> that =
+          (FlinkAccumulatorCombiningStateWithContext<?, ?, ?, ?>) o;
+
+      return namespace.equals(that.namespace) && address.equals(that.address);
+
+    }
+
+    @Override
+    public int hashCode() {
+      int result = namespace.hashCode();
+      result = 31 * result + address.hashCode();
+      return result;
+    }
+  }
+
+  private static class FlinkWatermarkHoldState<K, W extends BoundedWindow>
+      implements WatermarkHoldState<W> {
+    private final StateTag<? super K, WatermarkHoldState<W>> address;
+    private final OutputTimeFn<? super W> outputTimeFn;
+    private final StateNamespace namespace;
+    private final KeyedStateBackend<ByteBuffer> flinkStateBackend;
+    private final FlinkStateInternals<K> flinkStateInternals;
+    private final ValueStateDescriptor<Instant> flinkStateDescriptor;
+
+    public FlinkWatermarkHoldState(
+        KeyedStateBackend<ByteBuffer> flinkStateBackend,
+        FlinkStateInternals<K> flinkStateInternals,
+        StateTag<? super K, WatermarkHoldState<W>> address,
+        StateNamespace namespace,
+        OutputTimeFn<? super W> outputTimeFn) {
+      this.address = address;
+      this.outputTimeFn = outputTimeFn;
+      this.namespace = namespace;
+      this.flinkStateBackend = flinkStateBackend;
+      this.flinkStateInternals = flinkStateInternals;
+
+      CoderTypeInformation<Instant> typeInfo = new CoderTypeInformation<>(InstantCoder.of());
+      flinkStateDescriptor = new ValueStateDescriptor<>(address.getId(), typeInfo, null);
     }
 
     @Override
@@ -419,315 +942,112 @@ public class FlinkStateInternals<K> implements StateInternals<K> {
     }
 
     @Override
-    public Instant read() {
-      return minimumHold;
-    }
-
-    @Override
     public WatermarkHoldState<W> readLater() {
-      // Ignore
       return this;
-    }
-
-    @Override
-    public String toString() {
-      return Objects.toString(minimumHold);
-    }
-
-    @Override
-    public boolean shouldPersist() {
-      return minimumHold != null;
-    }
-
-    @Override
-    public void persistState(StateCheckpointWriter checkpointBuilder) throws IOException {
-      if (minimumHold != null) {
-        checkpointBuilder.addWatermarkHoldsBuilder()
-            .setTag(stateKey)
-            .setTimestamp(minimumHold);
-      }
-    }
-
-    public void restoreState(StateCheckpointReader checkpointReader) throws IOException {
-      Instant watermark = checkpointReader.getTimestamp();
-      add(watermark);
-    }
-  }
-
-
-  private static <K, InputT, AccumT, OutputT> CombineWithContext.KeyedCombineFnWithContext<K, InputT, AccumT, OutputT> withContext(
-      final Combine.KeyedCombineFn<K, InputT, AccumT, OutputT> combineFn) {
-    return new CombineWithContext.KeyedCombineFnWithContext<K, InputT, AccumT, OutputT>() {
-      @Override
-      public AccumT createAccumulator(K key, CombineWithContext.Context c) {
-        return combineFn.createAccumulator(key);
-      }
-
-      @Override
-      public AccumT addInput(K key, AccumT accumulator, InputT value, CombineWithContext.Context c) {
-        return combineFn.addInput(key, accumulator, value);
-      }
-
-      @Override
-      public AccumT mergeAccumulators(K key, Iterable<AccumT> accumulators, CombineWithContext.Context c) {
-        return combineFn.mergeAccumulators(key, accumulators);
-      }
-
-      @Override
-      public OutputT extractOutput(K key, AccumT accumulator, CombineWithContext.Context c) {
-        return combineFn.extractOutput(key, accumulator);
-      }
-    };
-  }
-
-  private static <K, InputT, AccumT, OutputT> CombineWithContext.KeyedCombineFnWithContext<K, InputT, AccumT, OutputT> withKeyAndContext(
-      final Combine.CombineFn<InputT, AccumT, OutputT> combineFn) {
-    return new CombineWithContext.KeyedCombineFnWithContext<K, InputT, AccumT, OutputT>() {
-      @Override
-      public AccumT createAccumulator(K key, CombineWithContext.Context c) {
-        return combineFn.createAccumulator();
-      }
-
-      @Override
-      public AccumT addInput(K key, AccumT accumulator, InputT value, CombineWithContext.Context c) {
-        return combineFn.addInput(accumulator, value);
-      }
-
-      @Override
-      public AccumT mergeAccumulators(K key, Iterable<AccumT> accumulators, CombineWithContext.Context c) {
-        return combineFn.mergeAccumulators(accumulators);
-      }
-
-      @Override
-      public OutputT extractOutput(K key, AccumT accumulator, CombineWithContext.Context c) {
-        return combineFn.extractOutput(accumulator);
-      }
-    };
-  }
-
-  private final class FlinkInMemoryKeyedCombiningValue<InputT, AccumT, OutputT>
-      implements AccumulatorCombiningState<InputT, AccumT, OutputT>, CheckpointableIF {
-
-    private final ByteString stateKey;
-    private final CombineWithContext.KeyedCombineFnWithContext<? super K, InputT, AccumT, OutputT> combineFn;
-    private final Coder<AccumT> accumCoder;
-    private final CombineWithContext.Context context;
-
-    private AccumT accum = null;
-    private boolean isClear = true;
-
-    private FlinkInMemoryKeyedCombiningValue(ByteString stateKey,
-                                             Combine.CombineFn<InputT, AccumT, OutputT> combineFn,
-                                             Coder<AccumT> accumCoder,
-                                             final StateContext<?> stateContext) {
-      this(stateKey, withKeyAndContext(combineFn), accumCoder, stateContext);
-    }
-
-
-    private FlinkInMemoryKeyedCombiningValue(ByteString stateKey,
-                                             Combine.KeyedCombineFn<? super K, InputT, AccumT, OutputT> combineFn,
-                                             Coder<AccumT> accumCoder,
-                                             final StateContext<?> stateContext) {
-      this(stateKey, withContext(combineFn), accumCoder, stateContext);
-    }
-
-    private FlinkInMemoryKeyedCombiningValue(ByteString stateKey,
-                                             CombineWithContext.KeyedCombineFnWithContext<? super K, InputT, AccumT, OutputT> combineFn,
-                                             Coder<AccumT> accumCoder,
-                                             final StateContext<?> stateContext) {
-      checkNotNull(combineFn);
-      checkNotNull(accumCoder);
-
-      this.stateKey = stateKey;
-      this.combineFn = combineFn;
-      this.accumCoder = accumCoder;
-      this.context = new CombineWithContext.Context() {
-        @Override
-        public PipelineOptions getPipelineOptions() {
-          return stateContext.getPipelineOptions();
-        }
-
-        @Override
-        public <T> T sideInput(PCollectionView<T> view) {
-          return stateContext.sideInput(view);
-        }
-      };
-      accum = combineFn.createAccumulator(key, context);
-    }
-
-    @Override
-    public void clear() {
-      accum = combineFn.createAccumulator(key, context);
-      isClear = true;
-    }
-
-    @Override
-    public void add(InputT input) {
-      isClear = false;
-      accum = combineFn.addInput(key, accum, input, context);
-    }
-
-    @Override
-    public AccumT getAccum() {
-      return accum;
     }
 
     @Override
     public ReadableState<Boolean> isEmpty() {
       return new ReadableState<Boolean>() {
         @Override
-        public ReadableState<Boolean> readLater() {
-          // Ignore
-          return this;
+        public Boolean read() {
+          try {
+            return flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor).value() == null;
+          } catch (Exception e) {
+            throw new RuntimeException("Error reading state.", e);
+          }
         }
 
         @Override
-        public Boolean read() {
-          return isClear;
+        public ReadableState<Boolean> readLater() {
+          return this;
         }
       };
+
     }
 
     @Override
-    public void addAccum(AccumT accum) {
-      isClear = false;
-      this.accum = combineFn.mergeAccumulators(key, Arrays.asList(this.accum, accum), context);
-    }
+    public void add(Instant value) {
+      try {
+        org.apache.flink.api.common.state.ValueState<Instant> state =
+            flinkStateBackend.getPartitionedState(
+              namespace.stringKey(),
+              StringSerializer.INSTANCE,
+              flinkStateDescriptor);
 
-    @Override
-    public AccumT mergeAccumulators(Iterable<AccumT> accumulators) {
-      return combineFn.mergeAccumulators(key, accumulators, context);
-    }
-
-    @Override
-    public OutputT read() {
-      return combineFn.extractOutput(key, accum, context);
-    }
-
-    @Override
-    public AccumulatorCombiningState<InputT, AccumT, OutputT> readLater() {
-      // Ignore
-      return this;
-    }
-
-    @Override
-    public boolean shouldPersist() {
-      return !isClear;
-    }
-
-    @Override
-    public void persistState(StateCheckpointWriter checkpointBuilder) throws IOException {
-      if (!isClear) {
-        // serialize the coder.
-        byte[] coder = InstantiationUtil.serializeObject(accumCoder);
-
-        // serialize the combiner.
-        byte[] combiner = InstantiationUtil.serializeObject(combineFn);
-
-        // encode the accumulator into a ByteString
-        ByteString.Output stream = ByteString.newOutput();
-        accumCoder.encode(accum, stream, Coder.Context.OUTER);
-        ByteString data = stream.toByteString();
-
-        // put the flag that the next serialized element is an accumulator
-        checkpointBuilder.addAccumulatorBuilder()
-          .setTag(stateKey)
-          .setData(coder)
-          .setData(combiner)
-          .setData(data);
+        Instant current = state.value();
+        if (current == null) {
+          state.update(value);
+          flinkStateInternals.watermarkHolds.put(namespace.stringKey(), value);
+        } else {
+          Instant combined = outputTimeFn.combine(current, value);
+          state.update(combined);
+          flinkStateInternals.watermarkHolds.put(namespace.stringKey(), combined);
+        }
+      } catch (Exception e) {
+        throw new RuntimeException("Error updating state.", e);
       }
     }
 
-    public void restoreState(StateCheckpointReader checkpointReader) throws IOException {
-      ByteString valueContent = checkpointReader.getData();
-      AccumT accum = this.accumCoder.decode(new ByteArrayInputStream(valueContent.toByteArray()), Coder.Context.OUTER);
-      addAccum(accum);
-    }
-  }
-
-  private static final class FlinkInMemoryBag<T> implements BagState<T>, CheckpointableIF {
-    private final List<T> contents = new ArrayList<>();
-
-    private final ByteString stateKey;
-    private final Coder<T> elemCoder;
-
-    public FlinkInMemoryBag(ByteString stateKey, Coder<T> elemCoder) {
-      this.stateKey = stateKey;
-      this.elemCoder = elemCoder;
+    @Override
+    public Instant read() {
+      try {
+        org.apache.flink.api.common.state.ValueState<Instant> state =
+            flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor);
+        return state.value();
+      } catch (Exception e) {
+        throw new RuntimeException("Error reading state.", e);
+      }
     }
 
     @Override
     public void clear() {
-      contents.clear();
-    }
-
-    @Override
-    public Iterable<T> read() {
-      return contents;
-    }
-
-    @Override
-    public BagState<T> readLater() {
-      // Ignore
-      return this;
-    }
-
-    @Override
-    public void add(T input) {
-      contents.add(input);
-    }
-
-    @Override
-    public ReadableState<Boolean> isEmpty() {
-      return new ReadableState<Boolean>() {
-        @Override
-        public ReadableState<Boolean> readLater() {
-          // Ignore
-          return this;
-        }
-
-        @Override
-        public Boolean read() {
-          return contents.isEmpty();
-        }
-      };
-    }
-
-    @Override
-    public boolean shouldPersist() {
-      return !contents.isEmpty();
-    }
-
-    @Override
-    public void persistState(StateCheckpointWriter checkpointBuilder) throws IOException {
-      if (!contents.isEmpty()) {
-        // serialize the coder.
-        byte[] coder = InstantiationUtil.serializeObject(elemCoder);
-
-        checkpointBuilder.addListUpdatesBuilder()
-            .setTag(stateKey)
-            .setData(coder)
-            .writeInt(contents.size());
-
-        for (T item : contents) {
-          // encode the element
-          ByteString.Output stream = ByteString.newOutput();
-          elemCoder.encode(item, stream, Coder.Context.OUTER);
-          ByteString data = stream.toByteString();
-
-          // add the data to the checkpoint.
-          checkpointBuilder.setData(data);
-        }
+      flinkStateInternals.watermarkHolds.remove(namespace.stringKey());
+      try {
+        org.apache.flink.api.common.state.ValueState<Instant> state =
+            flinkStateBackend.getPartitionedState(
+                namespace.stringKey(),
+                StringSerializer.INSTANCE,
+                flinkStateDescriptor);
+        state.clear();
+      } catch (Exception e) {
+        throw new RuntimeException("Error reading state.", e);
       }
     }
 
-    public void restoreState(StateCheckpointReader checkpointReader) throws IOException {
-      int noOfValues = checkpointReader.getInt();
-      for (int j = 0; j < noOfValues; j++) {
-        ByteString valueContent = checkpointReader.getData();
-        T outValue = elemCoder.decode(new ByteArrayInputStream(valueContent.toByteArray()), Coder.Context.OUTER);
-        add(outValue);
+    @Override
+    public boolean equals(Object o) {
+      if (this == o) {
+        return true;
       }
+      if (o == null || getClass() != o.getClass()) {
+        return false;
+      }
+
+      FlinkWatermarkHoldState<?, ?> that = (FlinkWatermarkHoldState<?, ?>) o;
+
+      if (!address.equals(that.address)) {
+        return false;
+      }
+      if (!outputTimeFn.equals(that.outputTimeFn)) {
+        return false;
+      }
+      return namespace.equals(that.namespace);
+
+    }
+
+    @Override
+    public int hashCode() {
+      int result = address.hashCode();
+      result = 31 * result + outputTimeFn.hashCode();
+      result = 31 * result + namespace.hashCode();
+      return result;
     }
   }
 }

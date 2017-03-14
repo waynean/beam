@@ -417,7 +417,7 @@ public class Pipeline {
     try {
       transforms.finishSpecifyingInput();
       transform.validate(input);
-      OutputT output = runner.apply(transform, input);
+      OutputT output = transform.expand(input);
       transforms.setOutput(output);
 
       return output;
@@ -444,7 +444,7 @@ public class Pipeline {
     LOG.debug("Replacing {} with {}", original, replacement);
     transforms.replaceNode(original, originalInput, replacement);
     try {
-      OutputT newOutput = runner.apply(replacement, originalInput);
+      OutputT newOutput = replacement.expand(originalInput);
       Map<PValue, ReplacementOutput> originalToReplacement =
           replacementFactory.mapOutputs(original.getOutputs(), newOutput);
       // Ensure the internal TransformHierarchy data structures are consistent.
@@ -456,15 +456,12 @@ public class Pipeline {
   }
 
   /**
-   * Returns the configured {@link PipelineRunner}.
-   */
-  public PipelineRunner<?> getRunner() {
-    return runner;
-  }
-
-  /**
    * Returns the configured {@link PipelineOptions}.
+   *
+   * @deprecated see BEAM-818 Remove Pipeline.getPipelineOptions. Configuration should be explicitly
+   *     provided to a transform if it is required.
    */
+  @Deprecated
   public PipelineOptions getOptions() {
     return options;
   }

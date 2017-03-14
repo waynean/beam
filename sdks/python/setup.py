@@ -34,16 +34,19 @@ def get_version():
   exec(open(os.path.normpath('./apache_beam/version.py')).read(), global_names)
   return global_names['__version__']
 
-PACKAGE_NAME = 'apache-beam-sdk'
+PACKAGE_NAME = 'apache-beam'
 PACKAGE_VERSION = get_version()
 PACKAGE_DESCRIPTION = 'Apache Beam SDK for Python'
 PACKAGE_URL = 'https://beam.apache.org'
-PACKAGE_DOWNLOAD_URL = 'TBD'
+PACKAGE_DOWNLOAD_URL = 'https://pypi.python.org/pypi/apache-beam'
 PACKAGE_AUTHOR = 'Apache Software Foundation'
 PACKAGE_EMAIL = 'dev@beam.apache.org'
 PACKAGE_KEYWORDS = 'apache beam'
 PACKAGE_LONG_DESCRIPTION = '''
-TBD
+Apache Beam is a unified programming model for both batch and streaming
+data processing, enabling efficient execution across diverse distributed
+execution engines and providing extensibility points for connecting to
+different technologies and user communities.
 '''
 
 REQUIRED_PIP_VERSION = '7.0.0'
@@ -82,26 +85,30 @@ else:
   except ImportError:
     cythonize = lambda *args, **kwargs: []
 
+
 REQUIRED_PACKAGES = [
     'avro>=1.7.7,<2.0.0',
     'crcmod>=1.7,<2.0',
-    'dill>=0.2.5,<0.3',
-    'google-apitools>=0.5.6,<1.0.0',
-    'proto-google-cloud-datastore-v1==0.90.0',
-    'googledatastore==7.0.0',
+    'dill==0.2.6',
     'httplib2>=0.8,<0.10',
     'mock>=1.0.1,<3.0.0',
     'oauth2client>=2.0.1,<4.0.0',
     'protobuf==3.2.0',
-    'protorpc>=0.9.1,<0.12',
-    'python-gflags>=2.0,<4.0.0',
     'pyyaml>=3.10,<4.0.0',
     ]
-
 
 REQUIRED_TEST_PACKAGES = [
     'pyhamcrest>=1.9,<2.0',
     ]
+
+GCP_REQUIREMENTS = [
+  'google-apitools>=0.5.6,<1.0.0',
+  'proto-google-cloud-datastore-v1==0.90.0',
+  'googledatastore==7.0.0',
+  # GCP packages required by tests
+  'google-cloud-bigquery>=0.22.1,<0.23',
+]
+
 
 setuptools.setup(
     name=PACKAGE_NAME,
@@ -127,6 +134,11 @@ setuptools.setup(
     install_requires=REQUIRED_PACKAGES,
     test_suite='nose.collector',
     tests_require=REQUIRED_TEST_PACKAGES,
+    extras_require={
+        'docs': ['Sphinx>=1.5.2,<2.0'],
+        'test': REQUIRED_TEST_PACKAGES,
+        'gcp': GCP_REQUIREMENTS
+    },
     zip_safe=False,
     # PyPI package information.
     classifiers=[

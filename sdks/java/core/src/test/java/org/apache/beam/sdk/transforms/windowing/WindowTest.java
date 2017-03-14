@@ -21,6 +21,8 @@ import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasDisp
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.hasKey;
 import static org.apache.beam.sdk.transforms.display.DisplayDataMatchers.includesDisplayDataFor;
 import static org.hamcrest.Matchers.equalTo;
+import static org.hamcrest.Matchers.instanceOf;
+import static org.hamcrest.Matchers.is;
 import static org.hamcrest.Matchers.isOneOf;
 import static org.hamcrest.Matchers.not;
 import static org.junit.Assert.assertEquals;
@@ -29,19 +31,29 @@ import static org.junit.Assert.assertTrue;
 import static org.mockito.Mockito.when;
 
 import java.io.Serializable;
+import java.util.Collection;
+import java.util.Collections;
+import java.util.concurrent.atomic.AtomicBoolean;
+import org.apache.beam.sdk.Pipeline.PipelineVisitor;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.Coder.NonDeterministicException;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.io.CountingInput;
+import org.apache.beam.sdk.runners.TransformHierarchy;
+import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.RunnableOnService;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Create;
 import org.apache.beam.sdk.transforms.DoFn;
 import org.apache.beam.sdk.transforms.GroupByKey;
+import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.ParDo;
+import org.apache.beam.sdk.transforms.SimpleFunction;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.util.WindowingStrategy.AccumulationMode;
 import org.apache.beam.sdk.values.KV;
+import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TimestampedValue;
 import org.hamcrest.Matchers;
 import org.joda.time.Duration;
@@ -96,6 +108,26 @@ public class WindowTest implements Serializable {
   }
 
   @Test
+  public void testWindowIntoAccumulatingLatenessNoTrigger() {
+    FixedWindows fixed = FixedWindows.of(Duration.standardMinutes(10));
+    WindowingStrategy<?, ?> strategy =
+        pipeline
+            .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
+            .apply(
+                "Lateness",
+                Window.<String>into(fixed)
+                    .withAllowedLateness(Duration.standardDays(1))
+                    .accumulatingFiredPanes())
+            .getWindowingStrategy();
+
+    assertThat(strategy.isTriggerSpecified(), is(false));
+    assertThat(strategy.isModeSpecified(), is(true));
+    assertThat(strategy.isAllowedLatenessSpecified(), is(true));
+    assertThat(strategy.getMode(), equalTo(AccumulationMode.ACCUMULATING_FIRED_PANES));
+    assertThat(strategy.getAllowedLateness(), equalTo(Duration.standardDays(1)));
+  }
+
+  @Test
   public void testWindowPropagatesEachPart() {
     FixedWindows fixed10 = FixedWindows.of(Duration.standardMinutes(10));
     Repeatedly trigger = Repeatedly.forever(AfterPane.elementCountAtLeast(5));
@@ -131,6 +163,51 @@ public class WindowTest implements Serializable {
     assertEquals(fixed25, strategy.getWindowFn());
   }
 
+  /**
+   * With {@link #testWindowIntoNullWindowFnNoAssign()}, demonstrates that the expansions of the
+   * {@link Window.Bound} transform depends on if it actually assigns elements to windows.
+   */
+  @Test
+  public void testWindowIntoWindowFnAssign() {
+    pipeline
+        .apply(Create.of(1, 2, 3))
+        .apply(
+            Window.<Integer>into(
+                FixedWindows.of(Duration.standardMinutes(11L).plus(Duration.millis(1L)))));
+
+    final AtomicBoolean foundAssign = new AtomicBoolean(false);
+    pipeline.traverseTopologically(
+        new PipelineVisitor.Defaults() {
+          public void visitPrimitiveTransform(TransformHierarchy.Node node) {
+            if (node.getTransform() instanceof Window.Assign) {
+              foundAssign.set(true);
+            }
+          }
+        });
+    assertThat(foundAssign.get(), is(true));
+  }
+
+  /**
+   * With {@link #testWindowIntoWindowFnAssign()}, demonstrates that the expansions of the
+   * {@link Window.Bound} transform depends on if it actually assigns elements to windows.
+   */
+  @Test
+  public void testWindowIntoNullWindowFnNoAssign() {
+    pipeline
+        .apply(Create.of(1, 2, 3))
+        .apply(
+            Window.<Integer>triggering(AfterWatermark.pastEndOfWindow())
+                .withAllowedLateness(Duration.ZERO)
+                .accumulatingFiredPanes());
+
+    pipeline.traverseTopologically(
+        new PipelineVisitor.Defaults() {
+          public void visitPrimitiveTransform(TransformHierarchy.Node node) {
+            assertThat(node.getTransform(), not(instanceOf(Window.Assign.class)));
+          }
+        });
+  }
+
   @Test
   public void testWindowGetName() {
     assertEquals("Window.Into()",
@@ -159,13 +236,29 @@ public class WindowTest implements Serializable {
     FixedWindows fixed10 = FixedWindows.of(Duration.standardMinutes(10));
     Repeatedly trigger = Repeatedly.forever(AfterPane.elementCountAtLeast(5));
 
+    PCollection<String> input =
+        pipeline
+            .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
+            .apply("Window", Window.<String>into(fixed10));
     thrown.expect(IllegalArgumentException.class);
     thrown.expectMessage("requires that the accumulation mode");
-    pipeline
-      .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
-      .apply("Window", Window.<String>into(fixed10))
-      .apply("Lateness", Window.<String>withAllowedLateness(Duration.standardDays(1)))
-      .apply("Trigger", Window.<String>triggering(trigger));
+    input.apply(
+        "Triggering",
+        Window.<String>withAllowedLateness(Duration.standardDays(1)).triggering(trigger));
+  }
+
+  @Test
+  public void testMissingModeViaLateness() {
+    FixedWindows fixed = FixedWindows.of(Duration.standardMinutes(10));
+    PCollection<String> input =
+        pipeline
+            .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
+            .apply("Window", Window.<String>into(fixed));
+    thrown.expect(IllegalArgumentException.class);
+    thrown.expectMessage("allowed lateness");
+    thrown.expectMessage("accumulation mode be specified");
+    input
+        .apply("Lateness", Window.<String>withAllowedLateness(Duration.standardDays(1)));
   }
 
   @Test
@@ -180,6 +273,87 @@ public class WindowTest implements Serializable {
       .apply("Mode", Window.<String>accumulatingFiredPanes())
       .apply("Window", Window.<String>into(fixed10))
       .apply("Trigger", Window.<String>triggering(trigger));
+  }
+
+  private static class WindowOddEvenBuckets extends NonMergingWindowFn<Long, IntervalWindow> {
+    private static final IntervalWindow EVEN_WINDOW =
+        new IntervalWindow(
+            BoundedWindow.TIMESTAMP_MIN_VALUE, GlobalWindow.INSTANCE.maxTimestamp());
+    private static final IntervalWindow ODD_WINDOW =
+        new IntervalWindow(
+            BoundedWindow.TIMESTAMP_MIN_VALUE, GlobalWindow.INSTANCE.maxTimestamp().minus(1));
+
+    @Override
+    public Collection<IntervalWindow> assignWindows(AssignContext c) throws Exception {
+      if (c.element() % 2 == 0) {
+        return Collections.singleton(EVEN_WINDOW);
+      }
+      return Collections.singleton(ODD_WINDOW);
+    }
+
+    @Override
+    public boolean isCompatible(WindowFn<?, ?> other) {
+      return other instanceof WindowOddEvenBuckets;
+    }
+
+    @Override
+    public Coder<IntervalWindow> windowCoder() {
+      return new IntervalWindow.IntervalWindowCoder();
+    }
+
+    @Override
+    public IntervalWindow getSideInputWindow(BoundedWindow window) {
+      throw new UnsupportedOperationException(
+          String.format("Can't use %s for side inputs", getClass().getSimpleName()));
+    }
+  }
+
+  @Test
+  @Category(RunnableOnService.class)
+  public void testNoWindowFnDoesNotReassignWindows() {
+    pipeline.enableAbandonedNodeEnforcement(true);
+
+    final PCollection<Long> initialWindows =
+        pipeline
+            .apply(CountingInput.upTo(10L))
+            .apply("AssignWindows", Window.into(new WindowOddEvenBuckets()));
+
+    // Sanity check the window assignment to demonstrate the baseline
+    PAssert.that(initialWindows)
+        .inWindow(WindowOddEvenBuckets.EVEN_WINDOW)
+        .containsInAnyOrder(0L, 2L, 4L, 6L, 8L);
+    PAssert.that(initialWindows)
+        .inWindow(WindowOddEvenBuckets.ODD_WINDOW)
+        .containsInAnyOrder(1L, 3L, 5L, 7L, 9L);
+
+    PCollection<Boolean> upOne =
+        initialWindows.apply(
+            "ModifyTypes",
+            MapElements.<Long, Boolean>via(
+                new SimpleFunction<Long, Boolean>() {
+                  @Override
+                  public Boolean apply(Long input) {
+                    return input % 2 == 0;
+                  }
+                }));
+    PAssert.that(upOne)
+        .inWindow(WindowOddEvenBuckets.EVEN_WINDOW)
+        .containsInAnyOrder(true, true, true, true, true);
+    PAssert.that(upOne)
+        .inWindow(WindowOddEvenBuckets.ODD_WINDOW)
+        .containsInAnyOrder(false, false, false, false, false);
+
+    // The elements should be in the same windows, even though they would not be assigned to the
+    // same windows with the updated timestamps. If we try to apply the original WindowFn, the type
+    // will not be appropriate and the runner should crash, as a Boolean cannot be converted into
+    // a long.
+    PCollection<Boolean> updatedTrigger =
+        upOne.apply(
+            "UpdateWindowingStrategy",
+            Window.<Boolean>triggering(Never.ever())
+                .withAllowedLateness(Duration.ZERO)
+                .accumulatingFiredPanes());
+    pipeline.run();
   }
 
   /**

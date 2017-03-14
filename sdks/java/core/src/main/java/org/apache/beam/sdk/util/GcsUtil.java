@@ -18,6 +18,7 @@
 package org.apache.beam.sdk.util;
 
 import static com.google.common.base.Preconditions.checkArgument;
+import static com.google.common.base.Preconditions.checkNotNull;
 
 import com.google.api.client.googleapis.batch.BatchRequest;
 import com.google.api.client.googleapis.batch.json.JsonBatchCallback;
@@ -31,6 +32,7 @@ import com.google.api.services.storage.Storage;
 import com.google.api.services.storage.model.Bucket;
 import com.google.api.services.storage.model.Objects;
 import com.google.api.services.storage.model.StorageObject;
+import com.google.auto.value.AutoValue;
 import com.google.cloud.hadoop.gcsio.GoogleCloudStorageReadChannel;
 import com.google.cloud.hadoop.gcsio.GoogleCloudStorageWriteChannel;
 import com.google.cloud.hadoop.gcsio.ObjectWriteConditions;
@@ -52,6 +54,7 @@ import java.nio.channels.SeekableByteChannel;
 import java.nio.channels.WritableByteChannel;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.FileAlreadyExistsException;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.LinkedList;
@@ -160,13 +163,73 @@ public class GcsUtil {
    * Returns true if the given GCS pattern is supported otherwise fails with an
    * exception.
    */
-  public boolean isGcsPatternSupported(String gcsPattern) {
+  public static boolean isGcsPatternSupported(String gcsPattern) {
     if (RECURSIVE_GCS_PATTERN.matcher(gcsPattern).matches()) {
       throw new IllegalArgumentException("Unsupported wildcard usage in \"" + gcsPattern + "\": "
           + " recursive wildcards are not supported.");
     }
-
     return true;
+  }
+
+  /**
+   * Returns the prefix portion of the glob that doesn't contain wildcards.
+   */
+  public static String getGlobPrefix(String globExp) {
+    checkArgument(isGcsPatternSupported(globExp));
+    Matcher m = GLOB_PREFIX.matcher(globExp);
+    checkArgument(
+        m.matches(),
+        String.format("Glob expression: [%s] is not expandable.", globExp));
+    return m.group("PREFIX");
+  }
+
+  /**
+   * Expands glob expressions to regular expressions.
+   *
+   * @param globExp the glob expression to expand
+   * @return a string with the regular expression this glob expands to
+   */
+  public static String globToRegexp(String globExp) {
+    StringBuilder dst = new StringBuilder();
+    char[] src = globExp.toCharArray();
+    int i = 0;
+    while (i < src.length) {
+      char c = src[i++];
+      switch (c) {
+        case '*':
+          dst.append("[^/]*");
+          break;
+        case '?':
+          dst.append("[^/]");
+          break;
+        case '.':
+        case '+':
+        case '{':
+        case '}':
+        case '(':
+        case ')':
+        case '|':
+        case '^':
+        case '$':
+          // These need to be escaped in regular expressions
+          dst.append('\\').append(c);
+          break;
+        case '\\':
+          i = doubleSlashes(dst, src, i);
+          break;
+        default:
+          dst.append(c);
+          break;
+      }
+    }
+    return dst.toString();
+  }
+
+  /**
+   * Returns true if the given {@code spec} contains glob.
+   */
+  public static boolean isGlob(GcsPath spec) {
+    return GLOB_PREFIX.matcher(spec.getObject()).matches();
   }
 
   private GcsUtil(
@@ -192,10 +255,9 @@ public class GcsUtil {
    */
   public List<GcsPath> expand(GcsPath gcsPattern) throws IOException {
     checkArgument(isGcsPatternSupported(gcsPattern.getObject()));
-    Matcher m = GLOB_PREFIX.matcher(gcsPattern.getObject());
     Pattern p = null;
     String prefix = null;
-    if (!m.matches()) {
+    if (!isGlob(gcsPattern)) {
       // Not a glob.
       try {
         // Use a get request to fetch the metadata of the object, and ignore the return value.
@@ -208,7 +270,7 @@ public class GcsUtil {
       }
     } else {
       // Part before the first wildcard character.
-      prefix = m.group("PREFIX");
+      prefix = getGlobPrefix(gcsPattern.getObject());
       p = Pattern.compile(globToRegexp(gcsPattern.getObject()));
     }
 
@@ -284,6 +346,21 @@ public class GcsUtil {
   }
 
   /**
+   * Returns {@link StorageObjectOrIOException StorageObjectOrIOExceptions} for the given
+   * {@link GcsPath GcsPaths}.
+   */
+  public List<StorageObjectOrIOException> getObjects(List<GcsPath> gcsPaths)
+      throws IOException {
+    List<StorageObjectOrIOException[]> results = new ArrayList<>();
+    executeBatches(makeGetBatches(gcsPaths, results));
+    ImmutableList.Builder<StorageObjectOrIOException> ret = ImmutableList.builder();
+    for (StorageObjectOrIOException[] result : results) {
+      ret.add(result[0]);
+    }
+    return ret.build();
+  }
+
+  /**
    * Lists {@link Objects} given the {@code bucket}, {@code prefix}, {@code pageToken}.
    */
   public Objects listObjects(String bucket, String prefix, @Nullable String pageToken)
@@ -315,15 +392,23 @@ public class GcsUtil {
    * if the resource does not exist.
    */
   @VisibleForTesting
-  List<Long> fileSizes(Collection<GcsPath> paths) throws IOException {
-    List<StorageObject[]> results = Lists.newArrayList();
-    executeBatches(makeGetBatches(paths, results));
+  List<Long> fileSizes(List<GcsPath> paths) throws IOException {
+    List<StorageObjectOrIOException> results = getObjects(paths);
 
     ImmutableList.Builder<Long> ret = ImmutableList.builder();
-    for (StorageObject[] result : results) {
-      ret.add(result[0].getSize().longValue());
+    for (StorageObjectOrIOException result : results) {
+      ret.add(toFileSize(result));
     }
     return ret.build();
+  }
+
+  private Long toFileSize(StorageObjectOrIOException storageObjectOrIOException)
+      throws IOException {
+    if (storageObjectOrIOException.ioException() != null) {
+      throw storageObjectOrIOException.ioException();
+    } else {
+      return storageObjectOrIOException.storageObject().getSize().longValue();
+    }
   }
 
   /**
@@ -537,7 +622,7 @@ public class GcsUtil {
   @VisibleForTesting
   List<BatchRequest> makeGetBatches(
       Collection<GcsPath> paths,
-      List<StorageObject[]> results) throws IOException {
+      List<StorageObjectOrIOException[]> results) throws IOException {
     List<BatchRequest> batches = new LinkedList<>();
     for (List<GcsPath> filesToGet :
         Lists.partition(Lists.newArrayList(paths), MAX_REQUESTS_PER_BATCH)) {
@@ -596,28 +681,63 @@ public class GcsUtil {
     executeBatches(makeRemoveBatches(filenames));
   }
 
-  private StorageObject[] enqueueGetFileSize(final GcsPath path, BatchRequest batch)
+  private StorageObjectOrIOException[] enqueueGetFileSize(final GcsPath path, BatchRequest batch)
       throws IOException {
-    final StorageObject[] storageObject = new StorageObject[1];
+    final StorageObjectOrIOException[] ret = new StorageObjectOrIOException[1];
 
     Storage.Objects.Get getRequest = storageClient.objects()
         .get(path.getBucket(), path.getObject());
     getRequest.queue(batch, new JsonBatchCallback<StorageObject>() {
       @Override
       public void onSuccess(StorageObject response, HttpHeaders httpHeaders) throws IOException {
-        storageObject[0] = response;
+        ret[0] = StorageObjectOrIOException.create(response);
       }
 
       @Override
       public void onFailure(GoogleJsonError e, HttpHeaders httpHeaders) throws IOException {
+        IOException ioException;
         if (errorExtractor.itemNotFound(e)) {
-          throw new FileNotFoundException(path.toString());
+          ioException = new FileNotFoundException(path.toString());
         } else {
-          throw new IOException(String.format("Error trying to get %s: %s", path, e));
+          ioException = new IOException(String.format("Error trying to get %s: %s", path, e));
         }
+        ret[0] = StorageObjectOrIOException.create(ioException);
       }
     });
-    return storageObject;
+    return ret;
+  }
+
+  /**
+   * A class that holds either a {@link StorageObject} or an {@link IOException}.
+   */
+  @AutoValue
+  public abstract static class StorageObjectOrIOException {
+
+    /**
+     * Returns the {@link StorageObject}.
+     */
+    @Nullable
+    public abstract StorageObject storageObject();
+
+    /**
+     * Returns the {@link IOException}.
+     */
+    @Nullable
+    public abstract IOException ioException();
+
+    @VisibleForTesting
+    public static StorageObjectOrIOException create(StorageObject storageObject) {
+      return new AutoValue_GcsUtil_StorageObjectOrIOException(
+          checkNotNull(storageObject, "storageObject"),
+          null /* ioException */);
+    }
+
+    @VisibleForTesting
+    public static StorageObjectOrIOException create(IOException ioException) {
+      return new AutoValue_GcsUtil_StorageObjectOrIOException(
+          null /* storageObject */,
+          checkNotNull(ioException, "ioException"));
+    }
   }
 
   private void enqueueCopy(final GcsPath from, final GcsPath to, BatchRequest batch)
@@ -666,48 +786,6 @@ public class GcsUtil {
 
   private BatchRequest createBatchRequest() {
     return storageClient.batch(httpRequestInitializer);
-  }
-
-  /**
-   * Expands glob expressions to regular expressions.
-   *
-   * @param globExp the glob expression to expand
-   * @return a string with the regular expression this glob expands to
-   */
-  static String globToRegexp(String globExp) {
-    StringBuilder dst = new StringBuilder();
-    char[] src = globExp.toCharArray();
-    int i = 0;
-    while (i < src.length) {
-      char c = src[i++];
-      switch (c) {
-        case '*':
-          dst.append("[^/]*");
-          break;
-        case '?':
-          dst.append("[^/]");
-          break;
-        case '.':
-        case '+':
-        case '{':
-        case '}':
-        case '(':
-        case ')':
-        case '|':
-        case '^':
-        case '$':
-          // These need to be escaped in regular expressions
-          dst.append('\\').append(c);
-          break;
-        case '\\':
-          i = doubleSlashes(dst, src, i);
-          break;
-        default:
-          dst.append(c);
-          break;
-      }
-    }
-    return dst.toString();
   }
 
   private static int doubleSlashes(StringBuilder dst, char[] src, int i) {

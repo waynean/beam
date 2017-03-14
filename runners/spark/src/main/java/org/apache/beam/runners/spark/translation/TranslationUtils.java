@@ -21,7 +21,6 @@ package org.apache.beam.runners.spark.translation;
 import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Maps;
 import java.io.Serializable;
-import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import org.apache.beam.runners.core.InMemoryStateInternals;
@@ -42,11 +41,12 @@ import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollectionView;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.spark.api.java.JavaSparkContext;
-import org.apache.spark.api.java.function.FlatMapFunction;
 import org.apache.spark.api.java.function.Function;
 import org.apache.spark.api.java.function.PairFunction;
+import org.apache.spark.api.java.function.VoidFunction;
 import org.apache.spark.streaming.api.java.JavaDStream;
 import org.apache.spark.streaming.api.java.JavaPairDStream;
+
 import scala.Tuple2;
 
 /**
@@ -102,14 +102,14 @@ public final class TranslationUtils {
    * with triggering or allowed lateness).
    * </p>
    *
-   * @param transform The {@link Window.Bound} transformation.
+   * @param transform The {@link Window.Assign} transformation.
    * @param context   The {@link EvaluationContext}.
    * @param <T>       PCollection type.
    * @param <W>       {@link BoundedWindow} type.
    * @return if to apply the transformation.
    */
   public static <T, W extends BoundedWindow> boolean
-  skipAssignWindows(Window.Bound<T> transform, EvaluationContext context) {
+  skipAssignWindows(Window.Assign<T> transform, EvaluationContext context) {
     @SuppressWarnings("unchecked")
     WindowFn<? super T, W> windowFn = (WindowFn<? super T, W>) transform.getWindowFn();
     return windowFn == null
@@ -129,7 +129,7 @@ public final class TranslationUtils {
   }
 
   /** {@link KV} to pair function. */
-  static <K, V> PairFunction<KV<K, V>, K, V> toPairFunction() {
+  public static <K, V> PairFunction<KV<K, V>, K, V> toPairFunction() {
     return new PairFunction<KV<K, V>, K, V>() {
       @Override
       public Tuple2<K, V> call(KV<K, V> kv) {
@@ -148,17 +148,24 @@ public final class TranslationUtils {
     };
   }
 
-  /** A Flatmap iterator function, flattening iterators into their elements. */
-  public static <T> FlatMapFunction<Iterator<T>, T> flattenIter() {
-    return new FlatMapFunction<Iterator<T>, T>() {
-      @Override
-      public Iterable<T> call(final Iterator<T> t) throws Exception {
-        return new Iterable<T>() {
+  /** Extract key from a {@link WindowedValue} {@link KV} into a pair. */
+  public static <K, V> PairFunction<WindowedValue<KV<K, V>>, K, WindowedValue<KV<K, V>>>
+      toPairByKeyInWindowedValue() {
+        return new PairFunction<WindowedValue<KV<K, V>>, K, WindowedValue<KV<K, V>>>() {
           @Override
-          public Iterator<T> iterator() {
-            return t;
-          }
+          public Tuple2<K, WindowedValue<KV<K, V>>> call(
+              WindowedValue<KV<K, V>> windowedKv) throws Exception {
+                return new Tuple2<>(windowedKv.getValue().getKey(), windowedKv);
+              }
         };
+      }
+
+  /** Extract window from a {@link KV} with {@link WindowedValue} value. */
+  static <K, V> Function<KV<K, WindowedValue<V>>, WindowedValue<KV<K, V>>> toKVByWindowInValue() {
+    return new Function<KV<K, WindowedValue<V>>, WindowedValue<KV<K, V>>>() {
+      @Override public WindowedValue<KV<K, V>> call(KV<K, WindowedValue<V>> kv) throws Exception {
+        WindowedValue<V> wv = kv.getValue();
+        return wv.withValue(KV.of(kv.getKey(), wv.getValue()));
       }
     };
   }
@@ -223,6 +230,15 @@ public final class TranslationUtils {
     }
   }
 
+  public static void rejectSplittable(DoFn<?, ?> doFn) {
+    DoFnSignature signature = DoFnSignatures.getSignature(doFn.getClass());
+
+    if (signature.processElement().isSplittable()) {
+      throw new UnsupportedOperationException(
+          String.format(
+              "%s does not support splittable DoFn: %s", SparkRunner.class.getSimpleName(), doFn));
+    }
+  }
   /**
    * Reject state and timers {@link DoFn}.
    *
@@ -252,4 +268,11 @@ public final class TranslationUtils {
     }
   }
 
+  public static <T> VoidFunction<T> emptyVoidFunction() {
+    return new VoidFunction<T>() {
+      @Override public void call(T t) throws Exception {
+        // Empty implementation.
+      }
+    };
+  }
 }

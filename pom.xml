@@ -34,7 +34,7 @@
   <url>http://beam.apache.org/</url>
   <inceptionYear>2016</inceptionYear>
 
-  <version>0.6.0-SNAPSHOT</version>
+  <version>0.7.0-SNAPSHOT</version>
 
   <licenses>
     <license>
@@ -135,6 +135,7 @@
     <stax2.version>3.1.4</stax2.version>
     <storage.version>v1-rev71-1.22.0</storage.version>
     <woodstox.version>4.4.1</woodstox.version>
+    <spring.version>4.3.5.RELEASE</spring.version>
     
     <compiler.error.flag>-Werror</compiler.error.flag>
     <compiler.default.pkginfo.flag>-Xpkginfo:always</compiler.default.pkginfo.flag>
@@ -334,7 +335,6 @@
         <version>${project.version}</version>
       </dependency>
 
-
       <dependency>
         <groupId>org.apache.beam</groupId>
         <artifactId>beam-runners-flink_2.10-examples</artifactId>
@@ -348,20 +348,26 @@
       </dependency>
 
       <dependency>
-	<groupId>org.apache.beam</groupId>
-	<artifactId>beam-sdks-java-extensions-join-library</artifactId>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-extensions-join-library</artifactId>
         <version>${project.version}</version>
       </dependency>
 
       <dependency>
-	<groupId>org.apache.beam</groupId>
-	<artifactId>beam-sdks-java-extensions-sorter</artifactId>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-extensions-sorter</artifactId>
         <version>${project.version}</version>
       </dependency>
 
       <dependency>
-	<groupId>org.apache.beam</groupId>
-	<artifactId>beam-sdks-java-harness</artifactId>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-harness</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-io-elasticsearch</artifactId>
         <version>${project.version}</version>
       </dependency>
 
@@ -373,7 +379,13 @@
 
       <dependency>
         <groupId>org.apache.beam</groupId>
-        <artifactId>beam-sdks-java-io-elasticsearch</artifactId>
+        <artifactId>beam-sdks-java-io-hadoop-common</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-sdks-java-io-hbase</artifactId>
         <version>${project.version}</version>
       </dependency>
 
@@ -416,6 +428,12 @@
       <dependency>
         <groupId>org.apache.beam</groupId>
         <artifactId>beam-sdks-java-io-mqtt</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-runners-core-construction-java</artifactId>
         <version>${project.version}</version>
       </dependency>
 
@@ -871,7 +889,13 @@
       <dependency>
         <groupId>net.bytebuddy</groupId>
         <artifactId>byte-buddy</artifactId>
-        <version>1.5.5</version>
+        <version>1.6.8</version>
+      </dependency>
+      
+      <dependency>
+        <groupId>org.springframework</groupId>
+        <artifactId>spring-expression</artifactId>
+        <version>${spring.version}</version>
       </dependency>
 
       <!-- Testing -->
@@ -1120,6 +1144,7 @@
               <exclude>**/test/**/.placeholder</exclude>
               <exclude>.repository/**/*</exclude>
               <exclude>**/nose-*.egg/**/*</exclude>
+              <exclude>**/.eggs/**/*</exclude>
               <exclude>**/.tox/**/*</exclude>
 
               <!-- Default eclipse excludes neglect subprojects -->
@@ -1285,7 +1310,7 @@
         <plugin>
           <groupId>org.apache.maven.plugins</groupId>
           <artifactId>maven-shade-plugin</artifactId>
-          <version>2.4.3</version>
+          <version>3.0.0</version>
         </plugin>
 
         <plugin>
@@ -1423,7 +1448,7 @@
                   <version>[1.7,)</version>
                 </requireJavaVersion>
                 <requireMavenVersion>
-                  <!-- Keep aligned with preqrequisite section below. -->
+                  <!-- Keep aligned with prerequisite section below. -->
                   <version>[3.2,)</version>
                 </requireMavenVersion>
               </rules>
@@ -1458,7 +1483,6 @@
       </plugin>
     </plugins>
   </reporting>
-
   <prerequisites>
     <!-- Keep aligned with requireMavenVersion section above. -->
     <maven>3.2</maven>

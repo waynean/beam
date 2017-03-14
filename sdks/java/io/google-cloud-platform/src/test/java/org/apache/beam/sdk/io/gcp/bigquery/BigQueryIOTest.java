@@ -140,10 +140,12 @@ import org.apache.beam.sdk.transforms.MapElements;
 import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SerializableFunction;
 import org.apache.beam.sdk.transforms.SimpleFunction;
+import org.apache.beam.sdk.transforms.View;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.transforms.display.DisplayDataEvaluator;
 import org.apache.beam.sdk.transforms.windowing.BoundedWindow;
 import org.apache.beam.sdk.transforms.windowing.GlobalWindow;
+import org.apache.beam.sdk.transforms.windowing.IntervalWindow;
 import org.apache.beam.sdk.transforms.windowing.NonMergingWindowFn;
 import org.apache.beam.sdk.transforms.windowing.Window;
 import org.apache.beam.sdk.transforms.windowing.WindowFn;
@@ -153,6 +155,7 @@ import org.apache.beam.sdk.util.IOChannelUtils;
 import org.apache.beam.sdk.util.MimeTypes;
 import org.apache.beam.sdk.util.PCollectionViews;
 import org.apache.beam.sdk.util.Transport;
+import org.apache.beam.sdk.util.WindowedValue;
 import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
@@ -2200,6 +2203,8 @@ public class BigQueryIOTest implements Serializable {
 
   @Test
   public void testWriteTables() throws Exception {
+    p.enableAbandonedNodeEnforcement(false);
+
     FakeBigQueryServices fakeBqServices = new FakeBigQueryServices()
         .withJobService(new FakeJobService()
             .startJobReturns("done", "done", "done", "done")
@@ -2223,10 +2228,18 @@ public class BigQueryIOTest implements Serializable {
       expectedTempTables.add(String.format("{\"tableId\":\"%s_%05d\"}", jobIdToken, i));
     }
 
+    PCollectionView<Iterable<String>> tempTablesView = PCollectionViews.iterableView(
+        p,
+        WindowingStrategy.globalDefault(),
+        StringUtf8Coder.of());
+    PCollection<String> jobIdTokenCollection = p.apply("CreateJobId", Create.of("jobId"));
+    PCollectionView<String> jobIdTokenView =
+        jobIdTokenCollection.apply(View.<String>asSingleton());
+
     WriteTables writeTables = new WriteTables(
         false,
         fakeBqServices,
-        StaticValueProvider.of(jobIdToken),
+        jobIdTokenView,
         tempFilePrefix,
         StaticValueProvider.of(jsonTable),
         StaticValueProvider.of(jsonSchema),
@@ -2235,6 +2248,7 @@ public class BigQueryIOTest implements Serializable {
         null);
 
     DoFnTester<KV<Long, Iterable<List<String>>>, String> tester = DoFnTester.of(writeTables);
+    tester.setSideInput(jobIdTokenView, GlobalWindow.INSTANCE, jobIdToken);
     for (KV<Long, Iterable<List<String>>> partition : partitions) {
       tester.processElement(partition);
     }
@@ -2296,10 +2310,13 @@ public class BigQueryIOTest implements Serializable {
         p,
         WindowingStrategy.globalDefault(),
         StringUtf8Coder.of());
+    PCollection<String> jobIdTokenCollection = p.apply("CreateJobId", Create.of("jobId"));
+    PCollectionView<String> jobIdTokenView =
+        jobIdTokenCollection.apply(View.<String>asSingleton());
 
     WriteRename writeRename = new WriteRename(
         fakeBqServices,
-        StaticValueProvider.of(jobIdToken),
+        jobIdTokenView,
         StaticValueProvider.of(jsonTable),
         WriteDisposition.WRITE_EMPTY,
         CreateDisposition.CREATE_IF_NEEDED,
@@ -2308,6 +2325,7 @@ public class BigQueryIOTest implements Serializable {
 
     DoFnTester<String, Void> tester = DoFnTester.of(writeRename);
     tester.setSideInput(tempTablesView, GlobalWindow.INSTANCE, tempTables);
+    tester.setSideInput(jobIdTokenView, GlobalWindow.INSTANCE, jobIdToken);
     tester.processElement(null);
   }
 
@@ -2459,6 +2477,21 @@ public class BigQueryIOTest implements Serializable {
   }
 
   @Test
+  public void testTableRowInfoCoderSerializable() {
+    CoderProperties.coderSerializable(BigQueryIO.TableRowInfoCoder.of());
+  }
+
+  @Test
+  public void testComplexCoderSerializable() {
+    CoderProperties.coderSerializable(
+        WindowedValue.getFullCoder(
+            KvCoder.of(
+                BigQueryIO.ShardedKeyCoder.of(StringUtf8Coder.of()),
+                BigQueryIO.TableRowInfoCoder.of()),
+            IntervalWindow.getCoder()));
+  }
+
+  @Test
   public void testUniqueStepIdRead() {
     RuntimeTestOptions options = PipelineOptionsFactory.as(RuntimeTestOptions.class);
     BigQueryOptions bqOptions = options.as(BigQueryOptions.class);
@@ -2472,31 +2505,5 @@ public class BigQueryIOTest implements Serializable {
     pipeline.apply(read2);
     assertNotEquals(read1.stepUuid, read2.stepUuid);
     assertNotEquals(read1.jobUuid.get(), read2.jobUuid.get());
-  }
-
-  @Test
-  public void testUniqueStepIdWrite() {
-    RuntimeTestOptions options = PipelineOptionsFactory.as(RuntimeTestOptions.class);
-    BigQueryOptions bqOptions = options.as(BigQueryOptions.class);
-    bqOptions.setTempLocation("gs://testbucket/testdir");
-    Pipeline pipeline = TestPipeline.create(options);
-    BigQueryIO.Write.Bound write1 = BigQueryIO.Write
-        .to(options.getOutputTable())
-        .withSchema(NestedValueProvider.of(
-            options.getOutputSchema(), new JsonSchemaToTableSchema()))
-        .withoutValidation();
-    BigQueryIO.Write.Bound write2 = BigQueryIO.Write
-        .to(options.getOutputTable())
-        .withSchema(NestedValueProvider.of(
-            options.getOutputSchema(), new JsonSchemaToTableSchema()))
-        .withoutValidation();
-    pipeline
-        .apply(Create.empty(TableRowJsonCoder.of()))
-        .apply(write1);
-    pipeline
-        .apply(Create.empty(TableRowJsonCoder.of()))
-        .apply(write2);
-    assertNotEquals(write1.stepUuid, write2.stepUuid);
-    assertNotEquals(write1.jobUuid.get(), write2.jobUuid.get());
   }
 }
