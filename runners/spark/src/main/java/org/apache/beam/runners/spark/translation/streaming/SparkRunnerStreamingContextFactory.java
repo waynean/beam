@@ -83,6 +83,8 @@ public class SparkRunnerStreamingContextFactory implements JavaStreamingContextF
     SparkRunner.initAccumulators(options, jsc);
 
     ctxt = new EvaluationContext(jsc, pipeline, jssc);
+    // update cache candidates
+    SparkRunner.updateCacheCandidates(pipeline, translator, ctxt);
     pipeline.traverseTopologically(new SparkRunner.Evaluator(translator, ctxt));
     ctxt.computeOutputs();
 

@@ -151,8 +151,7 @@ import org.slf4j.LoggerFactory;
  *
  * <h3>Partition Assignment and Checkpointing</h3>
  * The Kafka partitions are evenly distributed among splits (workers).
- * Dataflow checkpointing is fully supported and
- * each split can resume from previous checkpoint. See
+ * Checkpointing is fully supported and each split can resume from previous checkpoint. See
  * {@link UnboundedKafkaSource#generateInitialSplits(int, PipelineOptions)} for more details on
  * splits and checkpoint support.
  *
@@ -203,6 +202,14 @@ import org.slf4j.LoggerFactory;
  * {@link ProducerConfig} for sink. E.g. if you would like to enable offset
  * <em>auto commit</em> (for external monitoring or other purposes), you can set
  * <tt>"group.id"</tt>, <tt>"enable.auto.commit"</tt>, etc.
+ *
+ * <h3>Event Timestamp and Watermark</h3>
+ * By default record timestamp and watermark are based on processing time in KafkaIO reader.
+ * This can be overridden by providing {@code WatermarkFn} with
+ * {@link Read#withWatermarkFn(SerializableFunction)}, and {@code TimestampFn} with
+ * {@link Read#withTimestampFn(SerializableFunction)}.<br>
+ * Note that {@link KafkaRecord#getTimestamp()} reflects timestamp provided by Kafka if any,
+ * otherwise it is set to processing time.
  */
 public class KafkaIO {
   /**
@@ -428,6 +435,7 @@ public class KafkaIO {
       checkNotNull(getValueCoder(), "Value coder must be set");
     }
 
+    @Override
     public PCollection<KafkaRecord<K, V>> expand(PBegin input) {
      // Handles unbounded source to bounded conversion if maxNumRecords or maxReadTime is set.
       Unbounded<KafkaRecord<K, V>> unbounded =
@@ -458,6 +466,7 @@ public class KafkaIO {
     private static <KeyT, ValueT, OutT> SerializableFunction<KafkaRecord<KeyT, ValueT>, OutT>
     unwrapKafkaAndThen(final SerializableFunction<KV<KeyT, ValueT>, OutT> fn) {
       return new SerializableFunction<KafkaRecord<KeyT, ValueT>, OutT>() {
+        @Override
         public OutT apply(KafkaRecord<KeyT, ValueT> record) {
           return fn.apply(record.getKV());
         }
@@ -499,6 +508,7 @@ public class KafkaIO {
     private static final SerializableFunction<Map<String, Object>, Consumer<byte[], byte[]>>
       KAFKA_CONSUMER_FACTORY_FN =
         new SerializableFunction<Map<String, Object>, Consumer<byte[], byte[]>>() {
+          @Override
           public Consumer<byte[], byte[]> apply(Map<String, Object> config) {
             return new KafkaConsumer<>(config);
           }
@@ -627,6 +637,7 @@ public class KafkaIO {
       }
 
       Collections.sort(partitions, new Comparator<TopicPartition>() {
+        @Override
         public int compare(TopicPartition tp1, TopicPartition tp2) {
           return ComparisonChain
               .start()
@@ -750,6 +761,7 @@ public class KafkaIO {
     /** watermark before any records have been read. */
     private static Instant initialWatermark = new Instant(Long.MIN_VALUE);
 
+    @Override
     public String toString() {
       return name;
     }
@@ -800,13 +812,14 @@ public class KafkaIO {
     public UnboundedKafkaReader(
         UnboundedKafkaSource<K, V> source,
         @Nullable KafkaCheckpointMark checkpointMark) {
-
+      this.consumerSpEL = new ConsumerSpEL();
       this.source = source;
       this.name = "Reader-" + source.id;
 
       List<TopicPartition> partitions = source.spec.getTopicPartitions();
       partitionStates = ImmutableList.copyOf(Lists.transform(partitions,
           new Function<TopicPartition, PartitionState>() {
+            @Override
             public PartitionState apply(TopicPartition tp) {
               return new PartitionState(tp, UNINITIALIZED_OFFSET);
             }
@@ -818,7 +831,6 @@ public class KafkaIO {
 
         checkState(checkpointMark.getPartitions().size() == partitions.size(),
             "checkPointMark and assignedPartitions should match");
-        // we could consider allowing a mismatch, though it is not expected in current Dataflow
 
         for (int i = 0; i < partitions.size(); i++) {
           PartitionMark ckptMark = checkpointMark.getPartitions().get(i);
@@ -886,7 +898,6 @@ public class KafkaIO {
 
     @Override
     public boolean start() throws IOException {
-      this.consumerSpEL = new ConsumerSpEL();
       Read<K, V> spec = source.spec;
       consumer = spec.getConsumerFactoryFn().apply(spec.getConsumerConfig());
       consumerSpEL.evaluateAssign(consumer, spec.getTopicPartitions());
@@ -909,6 +920,7 @@ public class KafkaIO {
       // Note that consumer is not thread safe, should not be accessed out side consumerPollLoop().
       consumerPollThread.submit(
           new Runnable() {
+            @Override
             public void run() {
               consumerPollLoop();
             }
@@ -929,6 +941,7 @@ public class KafkaIO {
 
       offsetFetcherThread.scheduleAtFixedRate(
           new Runnable() {
+            @Override
             public void run() {
               updateLatestOffsets();
             }
@@ -986,6 +999,7 @@ public class KafkaIO {
               rawRecord.topic(),
               rawRecord.partition(),
               rawRecord.offset(),
+              consumerSpEL.getRecordTimestamp(rawRecord),
               decode(rawRecord.key(), source.spec.getKeyCoder()),
               decode(rawRecord.value(), source.spec.getValueCoder()));
 
@@ -1059,6 +1073,7 @@ public class KafkaIO {
       return new KafkaCheckpointMark(ImmutableList.copyOf(// avoid lazy (consumedOffset can change)
           Lists.transform(partitionStates,
               new Function<PartitionState, PartitionMark>() {
+                @Override
                 public PartitionMark apply(PartitionState p) {
                   return new PartitionMark(p.topicPartition.topic(),
                                            p.topicPartition.partition(),

@@ -34,7 +34,8 @@
 
   <properties>
     <dataflow.container_version>beam-master-20170314</dataflow.container_version>
-    <dataflow.environment_major_version>6</dataflow.environment_major_version>
+    <dataflow.fnapi_environment_major_version>1</dataflow.fnapi_environment_major_version>
+    <dataflow.legacy_environment_major_version>6</dataflow.legacy_environment_major_version>
   </properties>
 
   <build>
@@ -86,9 +87,6 @@
                 org.apache.beam.sdk.testing.UsesSplittableParDo,
                 org.apache.beam.sdk.testing.UsesUnboundedPCollections,
               </excludedGroups>
-              <excludes>
-                <exclude>org.apache.beam.sdk.transforms.FlattenTest</exclude>
-              </excludes>
             </configuration>
           </execution>
         </executions>
