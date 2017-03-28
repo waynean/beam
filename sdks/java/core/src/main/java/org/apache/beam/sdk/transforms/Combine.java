@@ -22,6 +22,7 @@ import static com.google.common.base.Preconditions.checkState;
 import com.fasterxml.jackson.annotation.JsonCreator;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import com.google.common.collect.ImmutableList;
+import com.google.common.collect.ImmutableMap;
 import com.google.common.collect.Iterables;
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,6 +31,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Iterator;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.ThreadLocalRandom;
 import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.coders.Coder;
@@ -70,6 +72,7 @@ import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.PCollectionList;
 import org.apache.beam.sdk.values.PCollectionTuple;
 import org.apache.beam.sdk.values.PCollectionView;
+import org.apache.beam.sdk.values.PValue;
 import org.apache.beam.sdk.values.TupleTag;
 import org.apache.beam.sdk.values.TupleTagList;
 import org.apache.beam.sdk.values.TypeDescriptor;
@@ -1433,6 +1436,20 @@ public class Combine {
     }
 
     /**
+     * Returns the side inputs of this {@link Combine}, tagged with the tag of the
+     * {@link PCollectionView}. The values of the returned map will be equal to the result of
+     * {@link #getSideInputs()}.
+     */
+    @Override
+    public Map<TupleTag<?>, PValue> getAdditionalInputs() {
+      ImmutableMap.Builder<TupleTag<?>, PValue> additionalInputs = ImmutableMap.builder();
+      for (PCollectionView<?> sideInput : sideInputs) {
+        additionalInputs.put(sideInput.getTagInternal(), sideInput);
+      }
+      return additionalInputs.build();
+    }
+
+    /**
      * Returns whether or not this transformation applies a default value.
      */
     public boolean isInsertDefault() {
@@ -1486,7 +1503,7 @@ public class Combine {
       final OutputT defaultValue = fn.defaultValue();
       PCollection<OutputT> defaultIfEmpty = maybeEmpty.getPipeline()
           .apply("CreateVoid", Create.of((Void) null).withCoder(VoidCoder.of()))
-          .apply("ProduceDefault", ParDo.withSideInputs(maybeEmptyView).of(
+          .apply("ProduceDefault", ParDo.of(
               new DoFn<Void, OutputT>() {
                 @ProcessElement
                 public void processElement(ProcessContext c) {
@@ -1495,7 +1512,7 @@ public class Combine {
                     c.output(defaultValue);
                   }
                 }
-              }))
+              }).withSideInputs(maybeEmptyView))
           .setCoder(maybeEmpty.getCoder())
           .setWindowingStrategyInternal(maybeEmpty.getWindowingStrategy());
 
@@ -1872,6 +1889,20 @@ public class Combine {
      */
     public List<PCollectionView<?>> getSideInputs() {
       return sideInputs;
+    }
+
+    /**
+     * Returns the side inputs of this {@link Combine}, tagged with the tag of the
+     * {@link PCollectionView}. The values of the returned map will be equal to the result of
+     * {@link #getSideInputs()}.
+     */
+    @Override
+    public Map<TupleTag<?>, PValue> getAdditionalInputs() {
+      ImmutableMap.Builder<TupleTag<?>, PValue> additionalInputs = ImmutableMap.builder();
+      for (PCollectionView<?> sideInput : sideInputs) {
+        additionalInputs.put(sideInput.getTagInternal(), sideInput);
+      }
+      return additionalInputs.build();
     }
 
     @Override
