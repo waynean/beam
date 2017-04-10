@@ -17,16 +17,26 @@
  */
 package org.apache.beam.sdk.util.state;
 
+import org.apache.beam.sdk.transforms.Combine.CombineFn;
+
 /**
- * Base interface for all state locations.
+ * State that combines multiple {@code InputT} values using a {@link CombineFn} to produce a single
+ * {@code OutputT} value.
  *
- * <p>Specific types of state add appropriate accessors for reading and writing values, see
- * {@link ValueState}, {@link BagState}, and {@link GroupingState}.
+ * @param <InputT> the type of values added to the state
+ * @param <OutputT> the type of value extracted from the state
  */
-public interface State {
+public interface GroupingState<InputT, OutputT> extends ReadableState<OutputT>, State {
+  /**
+   * Add a value to the buffer.
+   */
+  void add(InputT value);
 
   /**
-   * Clear out the state location.
+   * Return true if this state is empty.
    */
-  void clear();
+  ReadableState<Boolean> isEmpty();
+
+  @Override
+  GroupingState<InputT, OutputT> readLater();
 }

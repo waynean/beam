@@ -15,18 +15,16 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.sdk.util.state;
+package org.apache.beam.sdk.transforms.splittabledofn;
 
 /**
- * Base interface for all state locations.
- *
- * <p>Specific types of state add appropriate accessors for reading and writing values, see
- * {@link ValueState}, {@link BagState}, and {@link GroupingState}.
+ * Interface for restrictions for which a default implementation of {@link
+ * org.apache.beam.sdk.transforms.DoFn.NewTracker} is available, depending only on the restriction
+ * itself.
  */
-public interface State {
-
-  /**
-   * Clear out the state location.
-   */
-  void clear();
+public interface HasDefaultTracker<
+    RestrictionT extends HasDefaultTracker<RestrictionT, TrackerT>,
+    TrackerT extends RestrictionTracker<RestrictionT>> {
+  /** Creates a new tracker for {@code this}. */
+  TrackerT newTracker();
 }
