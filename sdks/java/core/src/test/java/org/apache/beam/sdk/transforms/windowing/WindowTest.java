@@ -39,7 +39,7 @@ import org.apache.beam.sdk.Pipeline.PipelineVisitor;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.Coder.NonDeterministicException;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
-import org.apache.beam.sdk.io.CountingInput;
+import org.apache.beam.sdk.io.GenerateSequence;
 import org.apache.beam.sdk.runners.TransformHierarchy;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
@@ -52,11 +52,11 @@ import org.apache.beam.sdk.transforms.ParDo;
 import org.apache.beam.sdk.transforms.SimpleFunction;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.transforms.display.DisplayDataEvaluator;
-import org.apache.beam.sdk.util.WindowingStrategy;
-import org.apache.beam.sdk.util.WindowingStrategy.AccumulationMode;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TimestampedValue;
+import org.apache.beam.sdk.values.WindowingStrategy;
+import org.apache.beam.sdk.values.WindowingStrategy.AccumulationMode;
 import org.hamcrest.Matchers;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
@@ -163,6 +163,42 @@ public class WindowTest implements Serializable {
 
     assertEquals(Duration.standardDays(1), strategy.getAllowedLateness());
     assertEquals(fixed25, strategy.getWindowFn());
+  }
+
+  @Test
+  public void testWindowIntoAssignesLongerAllowedLateness() {
+
+    FixedWindows fixed10 = FixedWindows.of(Duration.standardMinutes(10));
+    FixedWindows fixed25 = FixedWindows.of(Duration.standardMinutes(25));
+
+    PCollection<String> notChanged = pipeline
+        .apply(Create.of("hello", "world").withCoder(StringUtf8Coder.of()))
+        .apply("WindowInto25", Window.<String>into(fixed25)
+            .withAllowedLateness(Duration.standardDays(1))
+            .triggering(Repeatedly.forever(AfterPane.elementCountAtLeast(5)))
+            .accumulatingFiredPanes())
+        .apply("WindowInto10", Window.<String>into(fixed10)
+            .withAllowedLateness(Duration.standardDays(2)));
+
+    assertEquals(Duration.standardDays(2), notChanged.getWindowingStrategy()
+        .getAllowedLateness());
+
+    PCollection<String> data = pipeline
+        .apply("createChanged", Create.of("hello", "world").withCoder(StringUtf8Coder.of()));
+
+    PCollection<String> longWindow = data.apply("WindowInto25c", Window.<String>into(fixed25)
+            .withAllowedLateness(Duration.standardDays(1))
+            .triggering(Repeatedly.forever(AfterPane.elementCountAtLeast(5)))
+            .accumulatingFiredPanes());
+
+    assertEquals(Duration.standardDays(1), longWindow.getWindowingStrategy()
+        .getAllowedLateness());
+
+    PCollection<String> autoCorrectedWindow = longWindow.apply("WindowInto10c",
+        Window.<String>into(fixed10).withAllowedLateness(Duration.standardHours(1)));
+
+    assertEquals(Duration.standardDays(1), autoCorrectedWindow.getWindowingStrategy()
+        .getAllowedLateness());
   }
 
   /**
@@ -301,6 +337,14 @@ public class WindowTest implements Serializable {
     }
 
     @Override
+    public void verifyCompatibility(WindowFn<?, ?> other) throws IncompatibleWindowException {
+      if (!this.isCompatible(other)) {
+        throw new IncompatibleWindowException(
+            other, "WindowOddEvenBuckets is only compatible with WindowOddEvenBuckets.");
+      }
+    }
+
+    @Override
     public Coder<IntervalWindow> windowCoder() {
       return new IntervalWindow.IntervalWindowCoder();
     }
@@ -319,7 +363,7 @@ public class WindowTest implements Serializable {
 
     final PCollection<Long> initialWindows =
         pipeline
-            .apply(CountingInput.upTo(10L))
+            .apply(GenerateSequence.from(0).to(10))
             .apply("AssignWindows", Window.into(new WindowOddEvenBuckets()));
 
     // Sanity check the window assignment to demonstrate the baseline
@@ -366,7 +410,7 @@ public class WindowTest implements Serializable {
    */
   @Test
   @Category(ValidatesRunner.class)
-  public void testOutputTimeFnDefault() {
+  public void testTimestampCombinerDefault() {
     pipeline.enableAbandonedNodeEnforcement(true);
 
     pipeline
@@ -400,7 +444,7 @@ public class WindowTest implements Serializable {
    */
   @Test
   @Category(ValidatesRunner.class)
-  public void testOutputTimeFnEndOfWindow() {
+  public void testTimestampCombinerEndOfWindow() {
     pipeline.enableAbandonedNodeEnforcement(true);
 
     pipeline.apply(
@@ -408,7 +452,7 @@ public class WindowTest implements Serializable {
             TimestampedValue.of(KV.of(0, "hello"), new Instant(0)),
             TimestampedValue.of(KV.of(0, "goodbye"), new Instant(10))))
         .apply(Window.<KV<Integer, String>>into(FixedWindows.of(Duration.standardMinutes(10)))
-            .withOutputTimeFn(OutputTimeFns.outputAtEndOfWindow()))
+            .withTimestampCombiner(TimestampCombiner.END_OF_WINDOW))
         .apply(GroupByKey.<Integer, String>create())
         .apply(ParDo.of(new DoFn<KV<Integer, Iterable<String>>, Void>() {
           @ProcessElement
@@ -426,14 +470,14 @@ public class WindowTest implements Serializable {
     AfterWatermark.FromEndOfWindow triggerBuilder = AfterWatermark.pastEndOfWindow();
     Duration allowedLateness = Duration.standardMinutes(10);
     Window.ClosingBehavior closingBehavior = Window.ClosingBehavior.FIRE_IF_NON_EMPTY;
-    OutputTimeFn<BoundedWindow> outputTimeFn = OutputTimeFns.outputAtEndOfWindow();
+    TimestampCombiner timestampCombiner = TimestampCombiner.END_OF_WINDOW;
 
     Window<?> window = Window
         .into(windowFn)
         .triggering(triggerBuilder)
         .accumulatingFiredPanes()
         .withAllowedLateness(allowedLateness, closingBehavior)
-        .withOutputTimeFn(outputTimeFn);
+        .withTimestampCombiner(timestampCombiner);
 
     DisplayData displayData = DisplayData.from(window);
 
@@ -446,7 +490,7 @@ public class WindowTest implements Serializable {
     assertThat(displayData,
         hasDisplayItem("allowedLateness", allowedLateness));
     assertThat(displayData, hasDisplayItem("closingBehavior", closingBehavior.toString()));
-    assertThat(displayData, hasDisplayItem("outputTimeFn", outputTimeFn.getClass()));
+    assertThat(displayData, hasDisplayItem("timestampCombiner", timestampCombiner.toString()));
   }
 
   @Test
@@ -456,14 +500,14 @@ public class WindowTest implements Serializable {
     AfterWatermark.FromEndOfWindow triggerBuilder = AfterWatermark.pastEndOfWindow();
     Duration allowedLateness = Duration.standardMinutes(10);
     Window.ClosingBehavior closingBehavior = Window.ClosingBehavior.FIRE_IF_NON_EMPTY;
-    OutputTimeFn<BoundedWindow> outputTimeFn = OutputTimeFns.outputAtEndOfWindow();
+    TimestampCombiner timestampCombiner = TimestampCombiner.END_OF_WINDOW;
 
     Window<?> window = Window
         .into(windowFn)
         .triggering(triggerBuilder)
         .accumulatingFiredPanes()
         .withAllowedLateness(allowedLateness, closingBehavior)
-        .withOutputTimeFn(outputTimeFn);
+        .withTimestampCombiner(timestampCombiner);
 
     DisplayData primitiveDisplayData =
         Iterables.getOnlyElement(
@@ -478,7 +522,8 @@ public class WindowTest implements Serializable {
     assertThat(primitiveDisplayData,
         hasDisplayItem("allowedLateness", allowedLateness));
     assertThat(primitiveDisplayData, hasDisplayItem("closingBehavior", closingBehavior.toString()));
-    assertThat(primitiveDisplayData, hasDisplayItem("outputTimeFn", outputTimeFn.getClass()));
+    assertThat(
+        primitiveDisplayData, hasDisplayItem("timestampCombiner", timestampCombiner.toString()));
   }
 
   @Test
@@ -497,7 +542,7 @@ public class WindowTest implements Serializable {
     assertThat(displayData, not(hasDisplayItem("accumulationMode")));
     assertThat(displayData, not(hasDisplayItem("allowedLateness")));
     assertThat(displayData, not(hasDisplayItem("closingBehavior")));
-    assertThat(displayData, not(hasDisplayItem("outputTimeFn")));
+    assertThat(displayData, not(hasDisplayItem("timestampCombiner")));
   }
 
   @Test
@@ -506,7 +551,7 @@ public class WindowTest implements Serializable {
     assertThat(DisplayData.from(onlyHasAccumulationMode), not(hasDisplayItem(hasKey(isOneOf(
         "windowFn",
         "trigger",
-        "outputTimeFn",
+        "timestampCombiner",
         "allowedLateness",
         "closingBehavior")))));
 

@@ -26,7 +26,6 @@ import static org.hamcrest.collection.IsIterableContainingInAnyOrder.containsInA
 import static org.hamcrest.core.Is.is;
 import static org.junit.Assert.assertThat;
 
-import com.fasterxml.jackson.annotation.JsonCreator;
 import com.google.common.base.Function;
 import com.google.common.collect.Iterables;
 import java.io.DataInputStream;
@@ -42,9 +41,11 @@ import java.util.concurrent.ThreadLocalRandom;
 import org.apache.beam.sdk.coders.AtomicCoder;
 import org.apache.beam.sdk.coders.BigEndianIntegerCoder;
 import org.apache.beam.sdk.coders.Coder;
+import org.apache.beam.sdk.coders.CoderProviders;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.coders.MapCoder;
 import org.apache.beam.sdk.coders.StringUtf8Coder;
+import org.apache.beam.sdk.testing.LargeKeys;
 import org.apache.beam.sdk.testing.NeedsRunner;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
@@ -52,16 +53,15 @@ import org.apache.beam.sdk.testing.ValidatesRunner;
 import org.apache.beam.sdk.transforms.display.DisplayData;
 import org.apache.beam.sdk.transforms.windowing.FixedWindows;
 import org.apache.beam.sdk.transforms.windowing.InvalidWindows;
-import org.apache.beam.sdk.transforms.windowing.OutputTimeFns;
 import org.apache.beam.sdk.transforms.windowing.Sessions;
+import org.apache.beam.sdk.transforms.windowing.TimestampCombiner;
 import org.apache.beam.sdk.transforms.windowing.Window;
-import org.apache.beam.sdk.util.Reshuffle;
-import org.apache.beam.sdk.util.WindowingStrategy;
 import org.apache.beam.sdk.values.KV;
 import org.apache.beam.sdk.values.PBegin;
 import org.apache.beam.sdk.values.PCollection;
 import org.apache.beam.sdk.values.TimestampedValue;
 import org.apache.beam.sdk.values.TypeDescriptor;
+import org.apache.beam.sdk.values.WindowingStrategy;
 import org.joda.time.Duration;
 import org.joda.time.Instant;
 import org.junit.Assert;
@@ -319,14 +319,14 @@ public class GroupByKeyTest {
    */
   @Test
   @Category(ValidatesRunner.class)
-  public void testOutputTimeFnEarliest() {
+  public void testTimestampCombinerEarliest() {
 
     p.apply(
         Create.timestamped(
             TimestampedValue.of(KV.of(0, "hello"), new Instant(0)),
             TimestampedValue.of(KV.of(0, "goodbye"), new Instant(10))))
         .apply(Window.<KV<Integer, String>>into(FixedWindows.of(Duration.standardMinutes(10)))
-            .withOutputTimeFn(OutputTimeFns.outputAtEarliestInputTimestamp()))
+            .withTimestampCombiner(TimestampCombiner.EARLIEST))
         .apply(GroupByKey.<Integer, String>create())
         .apply(ParDo.of(new AssertTimestamp(new Instant(0))));
 
@@ -340,13 +340,13 @@ public class GroupByKeyTest {
    */
   @Test
   @Category(ValidatesRunner.class)
-  public void testOutputTimeFnLatest() {
+  public void testTimestampCombinerLatest() {
     p.apply(
         Create.timestamped(
             TimestampedValue.of(KV.of(0, "hello"), new Instant(0)),
             TimestampedValue.of(KV.of(0, "goodbye"), new Instant(10))))
         .apply(Window.<KV<Integer, String>>into(FixedWindows.of(Duration.standardMinutes(10)))
-            .withOutputTimeFn(OutputTimeFns.outputAtLatestInputTimestamp()))
+            .withTimestampCombiner(TimestampCombiner.LATEST))
         .apply(GroupByKey.<Integer, String>create())
         .apply(ParDo.of(new AssertTimestamp(new Instant(10))));
 
@@ -394,7 +394,8 @@ public class GroupByKeyTest {
     final int numValues = 10;
     final int numKeys = 5;
 
-    p.getCoderRegistry().registerCoder(BadEqualityKey.class, DeterministicKeyCoder.class);
+    p.getCoderRegistry().registerCoderProvider(
+        CoderProviders.fromStaticMethods(BadEqualityKey.class, DeterministicKeyCoder.class));
 
     // construct input data
     List<KV<BadEqualityKey, Long>> input = new ArrayList<>();
@@ -427,6 +428,79 @@ public class GroupByKeyTest {
     p.run();
   }
 
+  private static String bigString(char c, int size) {
+    char[] buf = new char[size];
+    for (int i = 0; i < size; i++) {
+      buf[i] = c;
+    }
+    return new String(buf);
+  }
+
+  private static void runLargeKeysTest(TestPipeline p, final int keySize) throws Exception {
+    PCollection<KV<String, Integer>> result = p
+        .apply(Create.of("a", "a", "b"))
+        .apply("Expand", ParDo.of(new DoFn<String, KV<String, String>>() {
+              @ProcessElement
+              public void process(ProcessContext c) {
+                c.output(KV.of(bigString(c.element().charAt(0), keySize), c.element()));
+              }
+          }))
+        .apply(GroupByKey.<String, String>create())
+        .apply("Count", ParDo.of(new DoFn<KV<String, Iterable<String>>, KV<String, Integer>>() {
+              @ProcessElement
+              public void process(ProcessContext c) {
+                int size = 0;
+                for (String value : c.element().getValue()) {
+                  size++;
+                }
+                c.output(KV.of(c.element().getKey(), size));
+              }
+          }));
+
+    PAssert.that(result).satisfies(
+        new SerializableFunction<Iterable<KV<String, Integer>>, Void>() {
+          @Override
+          public Void apply(Iterable<KV<String, Integer>> values) {
+            assertThat(values,
+                containsInAnyOrder(
+                    KV.of(bigString('a', keySize), 2), KV.of(bigString('b', keySize), 1)));
+            return null;
+          }
+        });
+
+    p.run();
+  }
+
+  @Test
+  @Category({ValidatesRunner.class, LargeKeys.Above10KB.class})
+  public void testLargeKeys10KB() throws Exception {
+    runLargeKeysTest(p, 10 << 10);
+  }
+
+  @Test
+  @Category({ValidatesRunner.class, LargeKeys.Above100KB.class})
+  public void testLargeKeys100KB() throws Exception {
+    runLargeKeysTest(p, 100 << 10);
+  }
+
+  @Test
+  @Category({ValidatesRunner.class, LargeKeys.Above1MB.class})
+  public void testLargeKeys1MB() throws Exception {
+    runLargeKeysTest(p, 1 << 20);
+  }
+
+  @Test
+  @Category({ValidatesRunner.class, LargeKeys.Above10MB.class})
+  public void testLargeKeys10MB() throws Exception {
+    runLargeKeysTest(p, 10 << 20);
+  }
+
+  @Test
+  @Category({ValidatesRunner.class, LargeKeys.Above100MB.class})
+  public void testLargeKeys100MB() throws Exception {
+    runLargeKeysTest(p, 100 << 20);
+  }
+
   /**
    * This is a bogus key class that returns random hash values from {@link #hashCode()} and always
    * returns {@code false} for {@link #equals(Object)}. The results of the test are correct if
@@ -457,7 +531,6 @@ public class GroupByKeyTest {
    */
   static class DeterministicKeyCoder extends AtomicCoder<BadEqualityKey> {
 
-    @JsonCreator
     public static DeterministicKeyCoder of() {
       return INSTANCE;
     }
@@ -470,16 +543,19 @@ public class GroupByKeyTest {
     private DeterministicKeyCoder() {}
 
     @Override
-    public void encode(BadEqualityKey value, OutputStream outStream, Context context)
+    public void encode(BadEqualityKey value, OutputStream outStream)
         throws IOException {
       new DataOutputStream(outStream).writeLong(value.key);
     }
 
     @Override
-    public BadEqualityKey decode(InputStream inStream, Context context)
+    public BadEqualityKey decode(InputStream inStream)
         throws IOException {
       return new BadEqualityKey(new DataInputStream(inStream).readLong());
     }
+
+    @Override
+    public void verifyDeterministic() {}
   }
 
   /**

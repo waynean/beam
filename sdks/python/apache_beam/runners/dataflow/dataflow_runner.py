@@ -25,7 +25,9 @@ import logging
 import threading
 import time
 import traceback
+import urllib
 
+from apache_beam import error
 from apache_beam import coders
 from apache_beam import pvalue
 from apache_beam.internal import pickler
@@ -42,7 +44,10 @@ from apache_beam.runners.runner import PipelineRunner
 from apache_beam.runners.runner import PipelineState
 from apache_beam.transforms.display import DisplayData
 from apache_beam.typehints import typehints
-from apache_beam.utils.pipeline_options import StandardOptions
+from apache_beam.options.pipeline_options import StandardOptions
+
+
+__all__ = ['DataflowRunner']
 
 
 class DataflowRunner(PipelineRunner):
@@ -58,8 +63,8 @@ class DataflowRunner(PipelineRunner):
   # Environment version information. It is passed to the service during a
   # a job submission and is used by the service to establish what features
   # are expected by the workers.
-  BATCH_ENVIRONMENT_MAJOR_VERSION = '5'
-  STREAMING_ENVIRONMENT_MAJOR_VERSION = '0'
+  BATCH_ENVIRONMENT_MAJOR_VERSION = '6'
+  STREAMING_ENVIRONMENT_MAJOR_VERSION = '1'
 
   def __init__(self, cache=None):
     # Cache of CloudWorkflowStep protos generated while the runner
@@ -75,7 +80,7 @@ class DataflowRunner(PipelineRunner):
   def poll_for_job_completion(runner, result):
     """Polls for the specified job to finish running (successfully or not)."""
     last_message_time = None
-    last_message_id = None
+    last_message_hash = None
 
     last_error_rank = float('-inf')
     last_error_msg = None
@@ -125,19 +130,20 @@ class DataflowRunner(PipelineRunner):
         messages, page_token = runner.dataflow_client.list_messages(
             job_id, page_token=page_token, start_time=last_message_time)
         for m in messages:
-          if last_message_id is not None and m.id == last_message_id:
+          message = '%s: %s: %s' % (m.time, m.messageImportance, m.messageText)
+          m_hash = hash(message)
+
+          if last_message_hash is not None and m_hash == last_message_hash:
             # Skip the first message if it is the last message we got in the
             # previous round. This can happen because we use the
             # last_message_time as a parameter of the query for new messages.
             continue
           last_message_time = m.time
-          last_message_id = m.id
+          last_message_hash = m_hash
           # Skip empty messages.
           if m.messageImportance is None:
             continue
-          logging.info(
-              '%s: %s: %s: %s', m.id, m.time, m.messageImportance,
-              m.messageText)
+          logging.info(message)
           if str(m.messageImportance) == 'JOB_MESSAGE_ERROR':
             if rank_error(m.messageText) >= last_error_rank:
               last_error_rank = rank_error(m.messageText)
@@ -148,6 +154,67 @@ class DataflowRunner(PipelineRunner):
     result._job = response
     runner.last_error_msg = last_error_msg
 
+  @staticmethod
+  def group_by_key_input_visitor():
+    # Imported here to avoid circular dependencies.
+    from apache_beam.pipeline import PipelineVisitor
+
+    class GroupByKeyInputVisitor(PipelineVisitor):
+      """A visitor that replaces `Any` element type for input `PCollection` of
+      a `GroupByKey` or `_GroupByKeyOnly` with a `KV` type.
+
+      TODO(BEAM-115): Once Python SDk is compatible with the new Runner API,
+      we could directly replace the coder instead of mutating the element type.
+      """
+
+      def visit_transform(self, transform_node):
+        # Imported here to avoid circular dependencies.
+        # pylint: disable=wrong-import-order, wrong-import-position
+        from apache_beam.transforms.core import GroupByKey, _GroupByKeyOnly
+        if isinstance(transform_node.transform, (GroupByKey, _GroupByKeyOnly)):
+          pcoll = transform_node.inputs[0]
+          input_type = pcoll.element_type
+          # If input_type is not specified, then treat it as `Any`.
+          if not input_type:
+            input_type = typehints.Any
+
+          if not isinstance(input_type, typehints.TupleHint.TupleConstraint):
+            if isinstance(input_type, typehints.AnyTypeConstraint):
+              # `Any` type needs to be replaced with a KV[Any, Any] to
+              # force a KV coder as the main output coder for the pcollection
+              # preceding a GroupByKey.
+              pcoll.element_type = typehints.KV[typehints.Any, typehints.Any]
+            else:
+              # TODO: Handle other valid types,
+              # e.g. Union[KV[str, int], KV[str, float]]
+              raise ValueError(
+                  "Input to GroupByKey must be of Tuple or Any type. "
+                  "Found %s for %s" % (input_type, pcoll))
+
+    return GroupByKeyInputVisitor()
+
+  @staticmethod
+  def flatten_input_visitor():
+    # Imported here to avoid circular dependencies.
+    from apache_beam.pipeline import PipelineVisitor
+
+    class FlattenInputVisitor(PipelineVisitor):
+      """A visitor that replaces the element type for input ``PCollections``s of
+       a ``Flatten`` transform with that of the output ``PCollection``.
+      """
+
+      def visit_transform(self, transform_node):
+        # Imported here to avoid circular dependencies.
+        # pylint: disable=wrong-import-order, wrong-import-position
+        from apache_beam import Flatten
+        if isinstance(transform_node.transform, Flatten):
+          output_pcoll = transform_node.outputs[None]
+          for input_pcoll in transform_node.inputs:
+            input_pcoll.element_type = output_pcoll.element_type
+
+    return FlattenInputVisitor()
+
+  # TODO(mariagh): Make this method take pipepline_options
   def run(self, pipeline):
     """Remotely executes entire pipeline or parts reachable from node."""
     # Import here to avoid adding the dependency for local running scenarios.
@@ -158,12 +225,20 @@ class DataflowRunner(PipelineRunner):
       raise ImportError(
           'Google Cloud Dataflow runner not available, '
           'please install apache_beam[gcp]')
-    self.job = apiclient.Job(pipeline.options)
+    self.job = apiclient.Job(pipeline._options)
+
+    # Dataflow runner requires a KV type for GBK inputs, hence we enforce that
+    # here.
+    pipeline.visit(self.group_by_key_input_visitor())
+
+    # Dataflow runner requires output type of the Flatten to be the same as the
+    # inputs, hence we enforce that here.
+    pipeline.visit(self.flatten_input_visitor())
 
     # The superclass's run will trigger a traversal of all reachable nodes.
     super(DataflowRunner, self).run(pipeline)
 
-    standard_options = pipeline.options.view_as(StandardOptions)
+    standard_options = pipeline._options.view_as(StandardOptions)
     if standard_options.streaming:
       job_version = DataflowRunner.STREAMING_ENVIRONMENT_MAJOR_VERSION
     else:
@@ -171,7 +246,7 @@ class DataflowRunner(PipelineRunner):
 
     # Get a Dataflow API client and set its options
     self.dataflow_client = apiclient.DataflowApplicationClient(
-        pipeline.options, job_version)
+        pipeline._options, job_version)
 
     # Create the job
     result = DataflowPipelineResult(
@@ -342,7 +417,9 @@ class DataflowRunner(PipelineRunner):
           PropertyNames.OUTPUT_NAME: PropertyNames.OUT}])
     windowing = transform_node.transform.get_windowing(
         transform_node.inputs)
-    step.add_property(PropertyNames.SERIALIZED_FN, pickler.dumps(windowing))
+    step.add_property(
+        PropertyNames.SERIALIZED_FN,
+        self.serialize_windowing_strategy(windowing))
 
   def run_ParDo(self, transform_node):
     transform = transform_node.transform
@@ -373,7 +450,7 @@ class DataflowRunner(PipelineRunner):
         transform_node.full_label + (
             '/Do' if transform_node.side_inputs else ''),
         transform_node,
-        transform_node.transform.side_output_tags)
+        transform_node.transform.output_tags)
     fn_data = self._pardo_fn_data(transform_node, lookup_label)
     step.add_property(PropertyNames.SERIALIZED_FN, pickler.dumps(fn_data))
     step.add_property(
@@ -384,7 +461,7 @@ class DataflowRunner(PipelineRunner):
     # Add side inputs if any.
     step.add_property(PropertyNames.NON_PARALLEL_INPUTS, si_dict)
 
-    # Generate description for main output and side outputs. The output names
+    # Generate description for the outputs. The output names
     # will be 'out' for main output and 'out_<tag>' for a tagged output.
     # Using 'out' as a tag will not clash with the name for main since it will
     # be transformed into 'out_out' internally.
@@ -397,8 +474,8 @@ class DataflowRunner(PipelineRunner):
             '%s.%s' % (transform_node.full_label, PropertyNames.OUT)),
          PropertyNames.ENCODING: step.encoding,
          PropertyNames.OUTPUT_NAME: PropertyNames.OUT})
-    for side_tag in transform.side_output_tags:
-      # The assumption here is that side outputs will have the same typehint
+    for side_tag in transform.output_tags:
+      # The assumption here is that all outputs will have the same typehint
       # and coder as the main output. This is certainly the case right now
       # but conceivably it could change in the future.
       outputs.append(
@@ -479,6 +556,11 @@ class DataflowRunner(PipelineRunner):
             'estimated_size_bytes': json_value.get_typed_value_descriptor(
                 transform.source.estimate_size())
         }
+      except error.RuntimeValueProviderError:
+        # Size estimation is best effort, and this error is by value provider.
+        logging.info(
+            'Could not estimate size of source %r due to ' + \
+            'RuntimeValueProviderError', transform.source)
       except Exception:  # pylint: disable=broad-except
         # Size estimation is best effort. So we log the error and continue.
         logging.info(
@@ -516,8 +598,8 @@ class DataflowRunner(PipelineRunner):
       standard_options = (
           transform_node.inputs[0].pipeline.options.view_as(StandardOptions))
       if not standard_options.streaming:
-        raise ValueError('PubSubSource is currently available for use only in '
-                         'streaming pipelines.')
+        raise ValueError('PubSubPayloadSource is currently available for use '
+                         'only in streaming pipelines.')
       step.add_property(PropertyNames.PUBSUB_TOPIC, transform.source.topic)
       if transform.source.subscription:
         step.add_property(PropertyNames.PUBSUB_SUBSCRIPTION,
@@ -598,8 +680,8 @@ class DataflowRunner(PipelineRunner):
       standard_options = (
           transform_node.inputs[0].pipeline.options.view_as(StandardOptions))
       if not standard_options.streaming:
-        raise ValueError('PubSubSink is currently available for use only in '
-                         'streaming pipelines.')
+        raise ValueError('PubSubPayloadSink is currently available for use '
+                         'only in streaming pipelines.')
       step.add_property(PropertyNames.PUBSUB_TOPIC, transform.sink.topic)
     else:
       raise ValueError(
@@ -617,6 +699,40 @@ class DataflowRunner(PipelineRunner):
         {'@type': 'OutputReference',
          PropertyNames.STEP_NAME: input_step.proto.name,
          PropertyNames.OUTPUT_NAME: input_step.get_output(input_tag)})
+
+  @classmethod
+  def serialize_windowing_strategy(cls, windowing):
+    from apache_beam.runners import pipeline_context
+    from apache_beam.runners.api import beam_runner_api_pb2
+    context = pipeline_context.PipelineContext()
+    windowing_proto = windowing.to_runner_api(context)
+    return cls.byte_array_to_json_string(
+        beam_runner_api_pb2.MessageWithComponents(
+            components=context.to_runner_api(),
+            windowing_strategy=windowing_proto).SerializeToString())
+
+  @classmethod
+  def deserialize_windowing_strategy(cls, serialized_data):
+    # Imported here to avoid circular dependencies.
+    # pylint: disable=wrong-import-order, wrong-import-position
+    from apache_beam.runners import pipeline_context
+    from apache_beam.runners.api import beam_runner_api_pb2
+    from apache_beam.transforms.core import Windowing
+    proto = beam_runner_api_pb2.MessageWithComponents()
+    proto.ParseFromString(cls.json_string_to_byte_array(serialized_data))
+    return Windowing.from_runner_api(
+        proto.windowing_strategy,
+        pipeline_context.PipelineContext(proto.components))
+
+  @staticmethod
+  def byte_array_to_json_string(raw_bytes):
+    """Implements org.apache.beam.sdk.util.StringUtils.byteArrayToJsonString."""
+    return urllib.quote(raw_bytes)
+
+  @staticmethod
+  def json_string_to_byte_array(encoded_string):
+    """Implements org.apache.beam.sdk.util.StringUtils.jsonStringToByteArray."""
+    return urllib.unquote(encoded_string)
 
 
 class DataflowPipelineResult(PipelineResult):

@@ -96,7 +96,7 @@ class ReadFromDatastore(PTransform):
     # Import here to avoid adding the dependency for local running scenarios.
     try:
       # pylint: disable=wrong-import-order, wrong-import-position
-      from apitools.base.py import *
+      from apitools.base import py  # pylint: disable=unused-variable
     except ImportError:
       raise ImportError(
           'Google Cloud IO not available, '
@@ -137,15 +137,15 @@ class ReadFromDatastore(PTransform):
     #   outputs a ``PCollection[Entity]``.
 
     queries = (pcoll.pipeline
-               | 'User Query' >> Create([self._query])
-               | 'Split Query' >> ParDo(ReadFromDatastore.SplitQueryFn(
+               | 'UserQuery' >> Create([self._query])
+               | 'SplitQuery' >> ParDo(ReadFromDatastore.SplitQueryFn(
                    self._project, self._query, self._datastore_namespace,
                    self._num_splits)))
 
     sharded_queries = (queries
                        | GroupByKey()
                        | Values()
-                       | 'flatten' >> FlatMap(lambda x: x))
+                       | 'Flatten' >> FlatMap(lambda x: x))
 
     entities = sharded_queries | 'Read' >> ParDo(
         ReadFromDatastore.ReadFn(self._project, self._datastore_namespace))
@@ -313,8 +313,12 @@ class _Mutate(PTransform):
   supported, as the commits are retried when failures occur.
   """
 
-  # Max allowed Datastore write batch size.
+  # Max allowed Datastore writes per batch, and max bytes per batch.
+  # Note that the max bytes per batch set here is lower than the 10MB limit
+  # actually enforced by the API, to leave space for the CommitRequest wrapper
+  # around the mutations.
   _WRITE_BATCH_SIZE = 500
+  _WRITE_BATCH_BYTES_SIZE = 9000000
 
   def __init__(self, project, mutation_fn):
     """Initializes a Mutate transform.
@@ -353,13 +357,20 @@ class _Mutate(PTransform):
       self._project = project
       self._datastore = None
       self._mutations = []
+      self._mutations_size = 0  # Total size of entries in _mutations.
 
     def start_bundle(self):
       self._mutations = []
+      self._mutations_size = 0
       self._datastore = helper.get_datastore(self._project)
 
     def process(self, element):
+      size = element.ByteSize()
+      if (self._mutations and
+          size + self._mutations_size > _Mutate._WRITE_BATCH_BYTES_SIZE):
+        self._flush_batch()
       self._mutations.append(element)
+      self._mutations_size += size
       if len(self._mutations) >= _Mutate._WRITE_BATCH_SIZE:
         self._flush_batch()
 
@@ -367,12 +378,14 @@ class _Mutate(PTransform):
       if self._mutations:
         self._flush_batch()
       self._mutations = []
+      self._mutations_size = 0
 
     def _flush_batch(self):
       # Flush the current batch of mutations to Cloud Datastore.
       helper.write_mutations(self._datastore, self._project, self._mutations)
       logging.debug("Successfully wrote %d mutations.", len(self._mutations))
       self._mutations = []
+      self._mutations_size = 0
 
 
 class WriteToDatastore(_Mutate):
@@ -382,7 +395,7 @@ class WriteToDatastore(_Mutate):
     # Import here to avoid adding the dependency for local running scenarios.
     try:
       # pylint: disable=wrong-import-order, wrong-import-position
-      from apitools.base.py import *
+      from apitools.base import py  # pylint: disable=unused-variable
     except ImportError:
       raise ImportError(
           'Google Cloud IO not available, '

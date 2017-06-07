@@ -45,11 +45,11 @@ call *one* row of the main table and *all* rows of the side table. The runner
 may use some caching techniques to share the side inputs between calls in order
 to avoid excessive reading:::
 
-  main_table = pipeline | 'very_big' >> beam.io.Read(beam.io.BigQuerySource()
-  side_table = pipeline | 'not_big' >> beam.io.Read(beam.io.BigQuerySource()
+  main_table = pipeline | 'VeryBig' >> beam.io.Read(beam.io.BigQuerySource()
+  side_table = pipeline | 'NotBig' >> beam.io.Read(beam.io.BigQuerySource()
   results = (
       main_table
-      | 'process data' >> beam.Map(
+      | 'ProcessData' >> beam.Map(
           lambda element, side_input: ..., AsList(side_table)))
 
 There is no difference in how main and side inputs are read. What makes the
@@ -115,9 +115,12 @@ from apache_beam.internal.gcp import auth
 from apache_beam.internal.gcp.json_value import from_json_value
 from apache_beam.internal.gcp.json_value import to_json_value
 from apache_beam.runners.dataflow.native_io import iobase as dataflow_io
+from apache_beam.transforms import DoFn
+from apache_beam.transforms import ParDo
+from apache_beam.transforms import PTransform
 from apache_beam.transforms.display import DisplayDataItem
 from apache_beam.utils import retry
-from apache_beam.utils.pipeline_options import GoogleCloudOptions
+from apache_beam.options.pipeline_options import GoogleCloudOptions
 from apache_beam.io.gcp.internal.clients import bigquery
 
 # Protect against environments where bigquery library is not available.
@@ -134,6 +137,7 @@ __all__ = [
     'BigQueryDisposition',
     'BigQuerySource',
     'BigQuerySink',
+    'WriteToBigQuery',
     ]
 
 JSON_COMPLIANCE_ERROR = 'NAN, INF and -INF values are not JSON compliant.'
@@ -370,7 +374,7 @@ class BigQuerySource(dataflow_io.NativeSource):
     # Import here to avoid adding the dependency for local running scenarios.
     try:
       # pylint: disable=wrong-import-order, wrong-import-position
-      from apitools.base.py import *
+      from apitools.base import py  # pylint: disable=unused-variable
     except ImportError:
       raise ImportError(
           'Google Cloud IO not available, '
@@ -480,7 +484,7 @@ class BigQuerySink(dataflow_io.NativeSink):
     # Import here to avoid adding the dependency for local running scenarios.
     try:
       # pylint: disable=wrong-import-order, wrong-import-position
-      from apitools.base.py import *
+      from apitools.base import py  # pylint: disable=unused-variable
     except ImportError:
       raise ImportError(
           'Google Cloud IO not available, '
@@ -605,9 +609,27 @@ class BigQueryReader(dataflow_io.NativeSourceReader):
     else:
       self.query = self.source.query
 
+  def _get_source_table_location(self):
+    tr = self.source.table_reference
+    if tr is None:
+      # TODO: implement location retrieval for query sources
+      return
+
+    if tr.projectId is None:
+      source_project_id = self.executing_project
+    else:
+      source_project_id = tr.projectId
+
+    source_dataset_id = tr.datasetId
+    source_table_id = tr.tableId
+    source_location = self.client.get_table_location(
+        source_project_id, source_dataset_id, source_table_id)
+    return source_location
+
   def __enter__(self):
     self.client = BigQueryWrapper(client=self.test_bigquery_client)
-    self.client.create_temporary_dataset(self.executing_project)
+    self.client.create_temporary_dataset(
+        self.executing_project, location=self._get_source_table_location())
     return self
 
   def __exit__(self, exception_type, exception_value, traceback):
@@ -795,13 +817,14 @@ class BigQueryWrapper(object):
     request = bigquery.BigqueryTablesInsertRequest(
         projectId=project_id, datasetId=dataset_id, table=table)
     response = self.client.tables.Insert(request)
+    logging.debug("Created the table with id %s", table_id)
     # The response is a bigquery.Table instance.
     return response
 
   @retry.with_exponential_backoff(
       num_retries=MAX_RETRIES,
       retry_filter=retry.retry_on_server_errors_and_timeout_filter)
-  def get_or_create_dataset(self, project_id, dataset_id):
+  def get_or_create_dataset(self, project_id, dataset_id, location=None):
     # Check if dataset already exists otherwise create it
     try:
       dataset = self.client.datasets.Get(bigquery.BigqueryDatasetsGetRequest(
@@ -809,9 +832,11 @@ class BigQueryWrapper(object):
       return dataset
     except HttpError as exn:
       if exn.status_code == 404:
-        dataset = bigquery.Dataset(
-            datasetReference=bigquery.DatasetReference(
-                projectId=project_id, datasetId=dataset_id))
+        dataset_reference = bigquery.DatasetReference(
+            projectId=project_id, datasetId=dataset_id)
+        dataset = bigquery.Dataset(datasetReference=dataset_reference)
+        if location is not None:
+          dataset.location = location
         request = bigquery.BigqueryDatasetsInsertRequest(
             projectId=project_id, dataset=dataset)
         response = self.client.datasets.Insert(request)
@@ -867,7 +892,15 @@ class BigQueryWrapper(object):
   @retry.with_exponential_backoff(
       num_retries=MAX_RETRIES,
       retry_filter=retry.retry_on_server_errors_and_timeout_filter)
-  def create_temporary_dataset(self, project_id):
+  def get_table_location(self, project_id, dataset_id, table_id):
+    table = self._get_table(project_id, dataset_id, table_id)
+    return table.location
+
+  @retry.with_exponential_backoff(
+      num_retries=MAX_RETRIES,
+      retry_filter=retry.retry_on_server_errors_and_timeout_filter)
+  def create_temporary_dataset(self, project_id, location=None):
+    # TODO: make location required, once "query" locations can be determined
     dataset_id = BigQueryWrapper.TEMP_DATASET + self._temporary_table_suffix
     # Check if dataset exists to make sure that the temporary id is unique
     try:
@@ -881,9 +914,10 @@ class BigQueryWrapper(object):
     except HttpError as exn:
       if exn.status_code == 404:
         logging.warning(
-            'Dataset %s:%s does not exist so we will create it as temporary',
-            project_id, dataset_id)
-        self.get_or_create_dataset(project_id, dataset_id)
+            'Dataset %s:%s does not exist so we will create it as temporary '
+            'with location=%s',
+            project_id, dataset_id, location)
+        self.get_or_create_dataset(project_id, dataset_id, location=location)
       else:
         raise
 
@@ -967,12 +1001,13 @@ class BigQueryWrapper(object):
           % (project_id, dataset_id, table_id))
     if found_table and write_disposition != BigQueryDisposition.WRITE_TRUNCATE:
       return found_table
-    # if write_disposition == BigQueryDisposition.WRITE_TRUNCATE we delete
-    # the table before this point.
-    return self._create_table(project_id=project_id,
-                              dataset_id=dataset_id,
-                              table_id=table_id,
-                              schema=schema or found_table.schema)
+    else:
+      # if write_disposition == BigQueryDisposition.WRITE_TRUNCATE we delete
+      # the table before this point.
+      return self._create_table(project_id=project_id,
+                                dataset_id=dataset_id,
+                                table_id=table_id,
+                                schema=schema or found_table.schema)
 
   def run_query(self, project_id, query, use_legacy_sql, flatten_results,
                 dry_run=False):
@@ -1090,12 +1125,8 @@ class BigQueryWrapper(object):
         value = cell['v'] if 'v' in cell else None
       if field.mode == 'REPEATED':
         if value is None:
-          # We receive 'None' for repeated fields without any values when
-          # 'flatten_results' is 'False'.
-          # When 'flatten_results' is 'True', we receive individual values
-          # instead of a list of values hence we do not hit this condition.
-          # We return an empty list here instead of 'None' to be consistent with
-          # other runners and to be backwards compatible to users.
+          # Ideally this should never happen as repeated fields default to
+          # returning an empty list
           result[field.name] = []
         else:
           result[field.name] = [self._convert_cell_value_to_dict(x['v'], field)
@@ -1108,3 +1139,175 @@ class BigQueryWrapper(object):
       else:
         result[field.name] = self._convert_cell_value_to_dict(value, field)
     return result
+
+
+class BigQueryWriteFn(DoFn):
+  """A ``DoFn`` that streams writes to BigQuery once the table is created.
+  """
+
+  def __init__(self, table_id, dataset_id, project_id, batch_size, schema,
+               create_disposition, write_disposition, client):
+    """Initialize a WriteToBigQuery transform.
+
+    Args:
+      table_id: The ID of the table. The ID must contain only letters
+        (a-z, A-Z), numbers (0-9), or underscores (_). If dataset argument is
+        None then the table argument must contain the entire table reference
+        specified as: 'DATASET.TABLE' or 'PROJECT:DATASET.TABLE'.
+      dataset_id: The ID of the dataset containing this table or null if the
+        table reference is specified entirely by the table argument.
+      project_id: The ID of the project containing this table or null if the
+        table reference is specified entirely by the table argument.
+      batch_size: Number of rows to be written to BQ per streaming API insert.
+      schema: The schema to be used if the BigQuery table to write has to be
+        created. This can be either specified as a 'bigquery.TableSchema' object
+        or a single string  of the form 'field1:type1,field2:type2,field3:type3'
+        that defines a comma separated list of fields. Here 'type' should
+        specify the BigQuery type of the field. Single string based schemas do
+        not support nested fields, repeated fields, or specifying a BigQuery
+        mode for fields (mode will always be set to 'NULLABLE').
+      create_disposition: A string describing what happens if the table does not
+        exist. Possible values are:
+        - BigQueryDisposition.CREATE_IF_NEEDED: create if does not exist.
+        - BigQueryDisposition.CREATE_NEVER: fail the write if does not exist.
+      write_disposition: A string describing what happens if the table has
+        already some data. Possible values are:
+        -  BigQueryDisposition.WRITE_TRUNCATE: delete existing rows.
+        -  BigQueryDisposition.WRITE_APPEND: add to existing rows.
+        -  BigQueryDisposition.WRITE_EMPTY: fail the write if table not empty.
+        For streaming pipelines WriteTruncate can not be used.
+      test_client: Override the default bigquery client used for testing.
+    """
+    self.table_id = table_id
+    self.dataset_id = dataset_id
+    self.project_id = project_id
+    self.schema = schema
+    self.client = client
+    self.create_disposition = create_disposition
+    self.write_disposition = write_disposition
+    self._rows_buffer = []
+    # The default batch size is 500
+    self._max_batch_size = batch_size or 500
+
+  @staticmethod
+  def get_table_schema(schema):
+    # Transform the table schema into a bigquery.TableSchema instance.
+    if isinstance(schema, basestring):
+      table_schema = bigquery.TableSchema()
+      schema_list = [s.strip() for s in schema.split(',')]
+      for field_and_type in schema_list:
+        field_name, field_type = field_and_type.split(':')
+        field_schema = bigquery.TableFieldSchema()
+        field_schema.name = field_name
+        field_schema.type = field_type
+        field_schema.mode = 'NULLABLE'
+        table_schema.fields.append(field_schema)
+      return table_schema
+    elif schema is None:
+      return schema
+    elif isinstance(schema, bigquery.TableSchema):
+      return schema
+    else:
+      raise TypeError('Unexpected schema argument: %s.' % schema)
+
+  def start_bundle(self):
+    self._rows_buffer = []
+    self.table_schema = self.get_table_schema(self.schema)
+
+    self.bigquery_wrapper = BigQueryWrapper(client=self.client)
+    self.bigquery_wrapper.get_or_create_table(
+        self.project_id, self.dataset_id, self.table_id, self.table_schema,
+        self.create_disposition, self.write_disposition)
+
+  def process(self, element, unused_create_fn_output=None):
+    self._rows_buffer.append(element)
+    if len(self._rows_buffer) >= self._max_batch_size:
+      self._flush_batch()
+
+  def finish_bundle(self):
+    if self._rows_buffer:
+      self._flush_batch()
+    self._rows_buffer = []
+
+  def _flush_batch(self):
+    # Flush the current batch of rows to BigQuery.
+    passed, errors = self.bigquery_wrapper.insert_rows(
+        project_id=self.project_id, dataset_id=self.dataset_id,
+        table_id=self.table_id, rows=self._rows_buffer)
+    if not passed:
+      raise RuntimeError('Could not successfully insert rows to BigQuery'
+                         ' table [%s:%s.%s]. Errors: %s'%
+                         (self.project_id, self.dataset_id,
+                          self.table_id, errors))
+    logging.debug("Successfully wrote %d rows.", len(self._rows_buffer))
+    self._rows_buffer = []
+
+
+class WriteToBigQuery(PTransform):
+
+  def __init__(self, table, dataset=None, project=None, schema=None,
+               create_disposition=BigQueryDisposition.CREATE_IF_NEEDED,
+               write_disposition=BigQueryDisposition.WRITE_APPEND,
+               batch_size=None, test_client=None):
+    """Initialize a WriteToBigQuery transform.
+
+    Args:
+      table: The ID of the table. The ID must contain only letters
+        (a-z, A-Z), numbers (0-9), or underscores (_). If dataset argument is
+        None then the table argument must contain the entire table reference
+        specified as: 'DATASET.TABLE' or 'PROJECT:DATASET.TABLE'.
+      dataset: The ID of the dataset containing this table or null if the table
+        reference is specified entirely by the table argument.
+      project: The ID of the project containing this table or null if the table
+        reference is specified entirely by the table argument.
+      schema: The schema to be used if the BigQuery table to write has to be
+        created. This can be either specified as a 'bigquery.TableSchema' object
+        or a single string  of the form 'field1:type1,field2:type2,field3:type3'
+        that defines a comma separated list of fields. Here 'type' should
+        specify the BigQuery type of the field. Single string based schemas do
+        not support nested fields, repeated fields, or specifying a BigQuery
+        mode for fields (mode will always be set to 'NULLABLE').
+      create_disposition: A string describing what happens if the table does not
+        exist. Possible values are:
+        - BigQueryDisposition.CREATE_IF_NEEDED: create if does not exist.
+        - BigQueryDisposition.CREATE_NEVER: fail the write if does not exist.
+      write_disposition: A string describing what happens if the table has
+        already some data. Possible values are:
+        -  BigQueryDisposition.WRITE_TRUNCATE: delete existing rows.
+        -  BigQueryDisposition.WRITE_APPEND: add to existing rows.
+        -  BigQueryDisposition.WRITE_EMPTY: fail the write if table not empty.
+        For streaming pipelines WriteTruncate can not be used.
+      batch_size: Number of rows to be written to BQ per streaming API insert.
+      test_client: Override the default bigquery client used for testing.
+    """
+    self.table_reference = _parse_table_reference(table, dataset, project)
+    self.create_disposition = BigQueryDisposition.validate_create(
+        create_disposition)
+    self.write_disposition = BigQueryDisposition.validate_write(
+        write_disposition)
+    self.schema = schema
+    self.batch_size = batch_size
+    self.test_client = test_client
+
+  def expand(self, pcoll):
+    bigquery_write_fn = BigQueryWriteFn(
+        table_id=self.table_reference.tableId,
+        dataset_id=self.table_reference.datasetId,
+        project_id=self.table_reference.projectId,
+        batch_size=self.batch_size,
+        schema=self.schema,
+        create_disposition=self.create_disposition,
+        write_disposition=self.write_disposition,
+        client=self.test_client)
+    return pcoll | 'Write to BigQuery' >> ParDo(bigquery_write_fn)
+
+  def display_data(self):
+    res = {}
+    if self.table_reference is not None:
+      tableSpec = '{}.{}'.format(self.table_reference.datasetId,
+                                 self.table_reference.tableId)
+      if self.table_reference.projectId is not None:
+        tableSpec = '{}:{}'.format(self.table_reference.projectId,
+                                   tableSpec)
+      res['table'] = DisplayDataItem(tableSpec, label='Table')
+    return res

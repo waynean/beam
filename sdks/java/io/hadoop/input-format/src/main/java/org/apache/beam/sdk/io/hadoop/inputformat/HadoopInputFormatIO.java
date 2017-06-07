@@ -23,12 +23,8 @@ import com.google.common.base.Function;
 import com.google.common.collect.ImmutableList;
 import com.google.common.collect.Lists;
 import com.google.common.util.concurrent.AtomicDouble;
-
-import java.io.Externalizable;
 import java.io.IOException;
-import java.io.ObjectInput;
 import java.io.ObjectInputStream;
-import java.io.ObjectOutput;
 import java.io.ObjectOutputStream;
 import java.io.Serializable;
 import java.math.BigDecimal;
@@ -39,9 +35,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicLong;
-
 import javax.annotation.Nullable;
-
 import org.apache.beam.sdk.annotations.Experimental;
 import org.apache.beam.sdk.coders.CannotProvideCoderException;
 import org.apache.beam.sdk.coders.Coder;
@@ -49,6 +43,7 @@ import org.apache.beam.sdk.coders.CoderException;
 import org.apache.beam.sdk.coders.CoderRegistry;
 import org.apache.beam.sdk.coders.KvCoder;
 import org.apache.beam.sdk.io.BoundedSource;
+import org.apache.beam.sdk.io.hadoop.SerializableConfiguration;
 import org.apache.beam.sdk.io.hadoop.WritableCoder;
 import org.apache.beam.sdk.options.PipelineOptions;
 import org.apache.beam.sdk.transforms.PTransform;
@@ -288,6 +283,7 @@ public class HadoopInputFormatIO {
 
     @Override
     public PCollection<KV<K, V>> expand(PBegin input) {
+      validateTransform();
       // Get the key and value coders based on the key and value classes.
       CoderRegistry coderRegistry = input.getPipeline().getCoderRegistry();
       Coder<K> keyCoder = getDefaultCoder(getKeyTypeDescriptor(), coderRegistry);
@@ -315,10 +311,10 @@ public class HadoopInputFormatIO {
     }
 
     /**
-     * Validates inputs provided by the pipeline user before reading the data.
+     * Validates construction of this transform.
      */
-    @Override
-    public void validate(PBegin input) {
+    @VisibleForTesting
+    void validateTransform() {
       checkNotNull(getConfiguration(), "getConfiguration()");
       // Validate that the key translation input type must be same as key class of InputFormat.
       validateTranslationFunction(getinputFormatKeyClass(), getKeyTranslationFunction(),
@@ -434,7 +430,7 @@ public class HadoopInputFormatIO {
     @Override
     public void populateDisplayData(DisplayData.Builder builder) {
       super.populateDisplayData(builder);
-      Configuration hadoopConfig = getConfiguration().getHadoopConfiguration();
+      Configuration hadoopConfig = getConfiguration().get();
       if (hadoopConfig != null) {
         builder.addIfNotNull(DisplayData.item("mapreduce.job.inputformat.class",
             hadoopConfig.get("mapreduce.job.inputformat.class"))
@@ -449,7 +445,7 @@ public class HadoopInputFormatIO {
     }
 
     @Override
-    public List<BoundedSource<KV<K, V>>> splitIntoBundles(long desiredBundleSizeBytes,
+    public List<BoundedSource<KV<K, V>>> split(long desiredBundleSizeBytes,
         PipelineOptions options) throws Exception {
       // desiredBundleSizeBytes is not being considered as splitting based on this
       // value is not supported by inputFormat getSplits() method.
@@ -485,7 +481,7 @@ public class HadoopInputFormatIO {
     /**
      * This is a helper function to compute splits. This method will also calculate size of the
      * data being read. Note: This method is executed exactly once and the splits are retrieved
-     * and cached in this. These splits are further used by splitIntoBundles() and
+     * and cached in this. These splits are further used by split() and
      * getEstimatedSizeBytes().
      */
     @VisibleForTesting
@@ -495,7 +491,7 @@ public class HadoopInputFormatIO {
       }
       createInputFormatInstance();
       List<InputSplit> splits =
-          inputFormatObj.getSplits(Job.getInstance(conf.getHadoopConfiguration()));
+          inputFormatObj.getSplits(Job.getInstance(conf.get()));
       if (splits == null) {
         throw new IOException("Error in computing splits, getSplits() returns null.");
       }
@@ -522,12 +518,12 @@ public class HadoopInputFormatIO {
       if (inputFormatObj == null) {
         try {
           taskAttemptContext =
-              new TaskAttemptContextImpl(conf.getHadoopConfiguration(), new TaskAttemptID());
+              new TaskAttemptContextImpl(conf.get(), new TaskAttemptID());
           inputFormatObj =
               (InputFormat<?, ?>) conf
-                  .getHadoopConfiguration()
+                  .get()
                   .getClassByName(
-                      conf.getHadoopConfiguration().get("mapreduce.job.inputformat.class"))
+                      conf.get().get("mapreduce.job.inputformat.class"))
                   .newInstance();
           /*
            * If InputFormat explicitly implements interface {@link Configurable}, then setConf()
@@ -537,7 +533,7 @@ public class HadoopInputFormatIO {
            * org.apache.hadoop.hbase.mapreduce.TableInputFormat TableInputFormat}, etc.
            */
           if (Configurable.class.isAssignableFrom(inputFormatObj.getClass())) {
-            ((Configurable) inputFormatObj).setConf(conf.getHadoopConfiguration());
+            ((Configurable) inputFormatObj).setConf(conf.get());
           }
         } catch (InstantiationException | IllegalAccessException | ClassNotFoundException e) {
           throw new IOException("Unable to create InputFormat object: ", e);
@@ -802,43 +798,6 @@ public class HadoopInputFormatIO {
 
     private void writeObject(ObjectOutputStream out) throws IOException {
       new ObjectWritable(inputSplit).write(out);
-    }
-  }
-
-  /**
-   * A wrapper to allow Hadoop {@link org.apache.hadoop.conf.Configuration} to be serialized using
-   * Java's standard serialization mechanisms. Note that the org.apache.hadoop.conf.Configuration
-   * is Writable.
-   */
-  public static class SerializableConfiguration implements Externalizable {
-
-    private Configuration conf;
-
-    public SerializableConfiguration() {}
-
-    public SerializableConfiguration(Configuration conf) {
-      this.conf = conf;
-    }
-
-    public Configuration getHadoopConfiguration() {
-      return conf;
-    }
-
-    @Override
-    public void writeExternal(ObjectOutput out) throws IOException {
-      out.writeUTF(conf.getClass().getCanonicalName());
-      ((Writable) conf).write(out);
-    }
-
-    @Override
-    public void readExternal(ObjectInput in) throws IOException, ClassNotFoundException {
-      String className = in.readUTF();
-      try {
-        conf = (Configuration) Class.forName(className).newInstance();
-        conf.readFields(in);
-      } catch (InstantiationException | IllegalAccessException e) {
-        throw new IOException("Unable to create configuration: " + e);
-      }
     }
   }
 }

@@ -24,7 +24,7 @@ import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertThat;
 
-import com.google.protobuf.ByteString;
+import java.nio.charset.StandardCharsets;
 import java.util.ArrayList;
 import java.util.List;
 import org.apache.beam.sdk.Pipeline;
@@ -33,6 +33,7 @@ import org.apache.beam.sdk.io.hbase.HBaseIO.HBaseSource;
 import org.apache.beam.sdk.io.range.ByteKey;
 import org.apache.beam.sdk.io.range.ByteKeyRange;
 import org.apache.beam.sdk.testing.PAssert;
+import org.apache.beam.sdk.testing.SourceTestUtils;
 import org.apache.beam.sdk.testing.TestPipeline;
 import org.apache.beam.sdk.transforms.Count;
 import org.apache.beam.sdk.transforms.Create;
@@ -197,7 +198,7 @@ public class HBaseIOTest {
         HBaseIO.Read read = HBaseIO.read().withConfiguration(conf).withTableId(table);
         HBaseSource source = new HBaseSource(read, null /* estimatedSizeBytes */);
         List<? extends BoundedSource<Result>> splits =
-                source.splitIntoBundles(numRows * bytesPerRow / numRegions,
+                source.split(numRows * bytesPerRow / numRegions,
                         null /* options */);
 
         // Test num splits and split equality.
@@ -205,6 +206,22 @@ public class HBaseIOTest {
         assertSourcesEqualReferenceSource(source, splits, null /* options */);
     }
 
+    /** Tests that a {@link HBaseSource} can be read twice, verifying its immutability. */
+    @Test
+    public void testReadingSourceTwice() throws Exception {
+        final String table = "TEST-READING-TWICE";
+        final int numRows = 10;
+
+        // Set up test table data and sample row keys for size estimation and splitting.
+        createTable(table);
+        writeData(table, numRows);
+
+        HBaseIO.Read read = HBaseIO.read().withConfiguration(conf).withTableId(table);
+        HBaseSource source = new HBaseSource(read, null /* estimatedSizeBytes */);
+        assertThat(SourceTestUtils.readFromSource(source, null), hasSize(numRows));
+        // second read.
+        assertThat(SourceTestUtils.readFromSource(source, null), hasSize(numRows));
+    }
 
     /** Tests reading all rows using a filter. */
     @Test
@@ -282,22 +299,23 @@ public class HBaseIOTest {
     /** Tests that when writing to a non-existent table, the write fails. */
     @Test
     public void testWritingFailsTableDoesNotExist() throws Exception {
-        final String table = "TEST-TABLE";
+        final String table = "TEST-TABLE-DOES-NOT-EXIST";
 
-        PCollection<KV<ByteString, Iterable<Mutation>>> emptyInput =
+        PCollection<KV<byte[], Iterable<Mutation>>> emptyInput =
                 p.apply(Create.empty(HBaseIO.WRITE_CODER));
+
+        emptyInput.apply("write", HBaseIO.write().withConfiguration(conf).withTableId(table));
 
         // Exception will be thrown by write.validate() when write is applied.
         thrown.expect(IllegalArgumentException.class);
         thrown.expectMessage(String.format("Table %s does not exist", table));
-
-        emptyInput.apply("write", HBaseIO.write().withConfiguration(conf).withTableId(table));
+        p.run();
     }
 
     /** Tests that when writing an element fails, the write fails. */
     @Test
     public void testWritingFailsBadElement() throws Exception {
-        final String table = "TEST-TABLE";
+        final String table = "TEST-TABLE-BAD-ELEMENT";
         final String key = "KEY";
         createTable(table);
 
@@ -380,8 +398,8 @@ public class HBaseIOTest {
 
     // Beam helper methods
     /** Helper function to make a single row mutation to be written. */
-    private static KV<ByteString, Iterable<Mutation>> makeWrite(String key, String value) {
-        ByteString rowKey = ByteString.copyFromUtf8(key);
+    private static KV<byte[], Iterable<Mutation>> makeWrite(String key, String value) {
+        byte[] rowKey = key.getBytes(StandardCharsets.UTF_8);
         List<Mutation> mutations = new ArrayList<>();
         mutations.add(makeMutation(key, value));
         return KV.of(rowKey, (Iterable<Mutation>) mutations);
@@ -389,17 +407,17 @@ public class HBaseIOTest {
 
 
     private static Mutation makeMutation(String key, String value) {
-        ByteString rowKey = ByteString.copyFromUtf8(key);
-        return new Put(rowKey.toByteArray())
+        byte[] rowKey = key.getBytes(StandardCharsets.UTF_8);
+        return new Put(rowKey)
                     .addColumn(COLUMN_FAMILY, COLUMN_NAME, Bytes.toBytes(value))
                     .addColumn(COLUMN_FAMILY, COLUMN_EMAIL, Bytes.toBytes(value + "@email.com"));
     }
 
-    private static KV<ByteString, Iterable<Mutation>> makeBadWrite(String key) {
+    private static KV<byte[], Iterable<Mutation>> makeBadWrite(String key) {
         Put put = new Put(key.getBytes());
         List<Mutation> mutations = new ArrayList<>();
         mutations.add(put);
-        return KV.of(ByteString.copyFromUtf8(key), (Iterable<Mutation>) mutations);
+        return KV.of(key.getBytes(StandardCharsets.UTF_8), (Iterable<Mutation>) mutations);
     }
 
     private void runReadTest(HBaseIO.Read read, List<Result> expected) {

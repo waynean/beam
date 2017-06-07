@@ -29,9 +29,9 @@ import com.google.datastore.v1.Query;
 import com.google.datastore.v1.client.Datastore;
 import java.util.UUID;
 import org.apache.beam.sdk.Pipeline;
+import org.apache.beam.sdk.extensions.gcp.options.GcpOptions;
 import org.apache.beam.sdk.io.gcp.datastore.V1TestUtil.UpsertMutationBuilder;
 import org.apache.beam.sdk.io.gcp.datastore.V1TestUtil.V1TestWriter;
-import org.apache.beam.sdk.options.GcpOptions;
 import org.apache.beam.sdk.options.PipelineOptionsFactory;
 import org.apache.beam.sdk.testing.PAssert;
 import org.apache.beam.sdk.testing.TestPipeline;
@@ -148,7 +148,7 @@ public class V1ReadIT {
     Key ancestorKey = makeAncestorKey(options.getNamespace(), options.getKind(), ancestor);
 
     for (long i = 0; i < numEntities; i++) {
-      Entity entity = makeEntity(i, ancestorKey, options.getKind(), options.getNamespace());
+      Entity entity = makeEntity(i, ancestorKey, options.getKind(), options.getNamespace(), 0);
       writer.write(entity);
     }
     writer.close();

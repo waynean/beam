@@ -56,7 +56,7 @@ import org.slf4j.LoggerFactory;
  * </pre>
  */
 public class ElasticsearchIOIT {
-  private static final Logger LOGGER = LoggerFactory.getLogger(ElasticsearchIOIT.class);
+  private static final Logger LOG = LoggerFactory.getLogger(ElasticsearchIOIT.class);
   private static TransportClient client;
   private static IOTestPipelineOptions options;
   private static ElasticsearchIO.ConnectionConfiguration readConnectionConfiguration;
@@ -88,7 +88,7 @@ public class ElasticsearchIOIT {
     // as many bundles as ES shards and bundle size is shard size
     long desiredBundleSizeBytes = 0;
     List<? extends BoundedSource<String>> splits =
-        initialSource.splitIntoBundles(desiredBundleSizeBytes, options);
+        initialSource.split(desiredBundleSizeBytes, options);
     SourceTestUtils.assertSourcesEqualReferenceSource(initialSource, splits, options);
     //this is the number of ES shards
     // (By default, each index in Elasticsearch is allocated 5 primary shards)
@@ -142,7 +142,7 @@ public class ElasticsearchIOIT {
     // can't use equal assert as Elasticsearch indexes never have same size
     // (due to internal Elasticsearch implementation)
     long estimatedSize = initialSource.getEstimatedSizeBytes(options);
-    LOGGER.info("Estimated size: {}", estimatedSize);
+    LOG.info("Estimated size: {}", estimatedSize);
     assertThat(
         "Wrong estimated size bellow minimum",
         estimatedSize,
