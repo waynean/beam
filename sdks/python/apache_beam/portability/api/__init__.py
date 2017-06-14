@@ -15,26 +15,7 @@
 # limitations under the License.
 #
 
-import logging
-import unittest
+"""For internal use only; no backwards-compatibility guarantees.
 
-import apache_beam as beam
-from apache_beam.runners.portability import fn_api_runner
-from apache_beam.runners.portability import maptask_executor_runner_test
-
-
-class FnApiRunnerTest(maptask_executor_runner_test.MapTaskExecutorRunnerTest):
-
-  def create_pipeline(self):
-    return beam.Pipeline(runner=fn_api_runner.FnApiRunner())
-
-  def test_combine_per_key(self):
-    # TODO(robertwb): Implement PGBKCV operation.
-    pass
-
-  # Inherits all tests from maptask_executor_runner.MapTaskExecutorRunner
-
-
-if __name__ == '__main__':
-  logging.getLogger().setLevel(logging.INFO)
-  unittest.main()
+Automatically generated when running setup.py sdist or build[_py].
+"""
