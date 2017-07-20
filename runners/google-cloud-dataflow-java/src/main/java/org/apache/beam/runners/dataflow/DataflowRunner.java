@@ -82,6 +82,7 @@ import org.apache.beam.sdk.Pipeline.PipelineVisitor;
 import org.apache.beam.sdk.PipelineResult.State;
 import org.apache.beam.sdk.PipelineRunner;
 import org.apache.beam.sdk.annotations.Experimental;
+import org.apache.beam.sdk.annotations.Internal;
 import org.apache.beam.sdk.coders.ByteArrayCoder;
 import org.apache.beam.sdk.coders.Coder;
 import org.apache.beam.sdk.coders.Coder.NonDeterministicException;
@@ -679,7 +680,8 @@ public class DataflowRunner extends PipelineRunner<DataflowPipelineJob> {
     }
 
     LOG.info("To access the Dataflow monitoring console, please navigate to {}",
-        MonitoringUtil.getJobMonitoringPageURL(options.getProject(), jobResult.getId()));
+        MonitoringUtil.getJobMonitoringPageURL(
+          options.getProject(), options.getRegion(), jobResult.getId()));
     System.out.println("Submitted job: " + jobResult.getId());
 
     LOG.info("To cancel the job using the 'gcloud' tool, run:\n> {}",
@@ -1292,7 +1294,7 @@ public class DataflowRunner extends PipelineRunner<DataflowPipelineJob> {
    * A marker {@link DoFn} for writing the contents of a {@link PCollection} to a streaming
    * {@link PCollectionView} backend implementation.
    */
-  @Deprecated
+  @Internal
   public static class StreamingPCollectionViewWriterFn<T> extends DoFn<Iterable<T>, T> {
     private final PCollectionView<?> view;
     private final Coder<T> dataCoder;
