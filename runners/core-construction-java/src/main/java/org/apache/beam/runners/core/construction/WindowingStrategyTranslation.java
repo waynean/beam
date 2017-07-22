@@ -322,7 +322,9 @@ public class WindowingStrategyTranslation implements Serializable {
       throws InvalidProtocolBufferException {
     switch (proto.getRootCase()) {
       case WINDOWING_STRATEGY:
-        return fromProto(proto.getWindowingStrategy(), proto.getComponents());
+        return fromProto(
+            proto.getWindowingStrategy(),
+            RehydratedComponents.forComponents(proto.getComponents()));
       default:
         throw new IllegalArgumentException(
             String.format(
@@ -336,7 +338,7 @@ public class WindowingStrategyTranslation implements Serializable {
    * the provided components to dereferences identifiers found in the proto.
    */
   public static WindowingStrategy<?, ?> fromProto(
-      RunnerApi.WindowingStrategy proto, Components components)
+      RunnerApi.WindowingStrategy proto, RehydratedComponents components)
       throws InvalidProtocolBufferException {
 
     SdkFunctionSpec windowFnSpec = proto.getWindowFn();
@@ -357,40 +359,55 @@ public class WindowingStrategyTranslation implements Serializable {
         .withOnTimeBehavior(onTimeBehavior);
   }
 
-  public static WindowFn<?, ?> windowFnFromProto(SdkFunctionSpec windowFnSpec)
-      throws InvalidProtocolBufferException {
-    switch (windowFnSpec.getSpec().getUrn()) {
-      case GLOBAL_WINDOWS_FN:
-        return new GlobalWindows();
-      case FIXED_WINDOWS_FN:
-        StandardWindowFns.FixedWindowsPayload fixedParams =
-            windowFnSpec.getSpec().getParameter().unpack(
-                StandardWindowFns.FixedWindowsPayload.class);
-        return FixedWindows.of(
-            Duration.millis(Durations.toMillis(fixedParams.getSize())))
-            .withOffset(Duration.millis(Timestamps.toMillis(fixedParams.getOffset())));
-      case SLIDING_WINDOWS_FN:
-        StandardWindowFns.SlidingWindowsPayload slidingParams =
-            windowFnSpec.getSpec().getParameter().unpack(
-                StandardWindowFns.SlidingWindowsPayload.class);
-        return SlidingWindows.of(
-            Duration.millis(Durations.toMillis(slidingParams.getSize())))
-            .every(Duration.millis(Durations.toMillis(slidingParams.getPeriod())))
-            .withOffset(Duration.millis(Timestamps.toMillis(slidingParams.getOffset())));
-      case SESSION_WINDOWS_FN:
-        StandardWindowFns.SessionsPayload sessionParams =
-            windowFnSpec.getSpec().getParameter().unpack(
-                StandardWindowFns.SessionsPayload.class);
-        return Sessions.withGapDuration(
-            Duration.millis(Durations.toMillis(sessionParams.getGapSize())));
-      case SERIALIZED_JAVA_WINDOWFN_URN:
-      case OLD_SERIALIZED_JAVA_WINDOWFN_URN:
-        return (WindowFn<?, ?>) SerializableUtils.deserializeFromByteArray(
-            windowFnSpec.getSpec().getParameter().unpack(BytesValue.class).getValue().toByteArray(),
-            "WindowFn");
-      default:
-        throw new IllegalArgumentException(
-            "Unknown or unsupported WindowFn: " + windowFnSpec.getSpec().getUrn());
+  public static WindowFn<?, ?> windowFnFromProto(SdkFunctionSpec windowFnSpec) {
+    try {
+      switch (windowFnSpec.getSpec().getUrn()) {
+        case GLOBAL_WINDOWS_FN:
+          return new GlobalWindows();
+        case FIXED_WINDOWS_FN:
+          StandardWindowFns.FixedWindowsPayload fixedParams =
+              windowFnSpec
+                  .getSpec()
+                  .getParameter()
+                  .unpack(StandardWindowFns.FixedWindowsPayload.class);
+          return FixedWindows.of(Duration.millis(Durations.toMillis(fixedParams.getSize())))
+              .withOffset(Duration.millis(Timestamps.toMillis(fixedParams.getOffset())));
+        case SLIDING_WINDOWS_FN:
+          StandardWindowFns.SlidingWindowsPayload slidingParams =
+              windowFnSpec
+                  .getSpec()
+                  .getParameter()
+                  .unpack(StandardWindowFns.SlidingWindowsPayload.class);
+          return SlidingWindows.of(Duration.millis(Durations.toMillis(slidingParams.getSize())))
+              .every(Duration.millis(Durations.toMillis(slidingParams.getPeriod())))
+              .withOffset(Duration.millis(Timestamps.toMillis(slidingParams.getOffset())));
+        case SESSION_WINDOWS_FN:
+          StandardWindowFns.SessionsPayload sessionParams =
+              windowFnSpec.getSpec().getParameter().unpack(StandardWindowFns.SessionsPayload.class);
+          return Sessions.withGapDuration(
+              Duration.millis(Durations.toMillis(sessionParams.getGapSize())));
+        case SERIALIZED_JAVA_WINDOWFN_URN:
+        case OLD_SERIALIZED_JAVA_WINDOWFN_URN:
+          return (WindowFn<?, ?>)
+              SerializableUtils.deserializeFromByteArray(
+                  windowFnSpec
+                      .getSpec()
+                      .getParameter()
+                      .unpack(BytesValue.class)
+                      .getValue()
+                      .toByteArray(),
+                  "WindowFn");
+        default:
+          throw new IllegalArgumentException(
+              "Unknown or unsupported WindowFn: " + windowFnSpec.getSpec().getUrn());
+      }
+    } catch (InvalidProtocolBufferException exc) {
+      throw new IllegalArgumentException(
+          String.format(
+              "%s for %s with URN %s did not contain expected proto message for payload",
+              FunctionSpec.class.getSimpleName(),
+              WindowFn.class.getSimpleName(),
+              windowFnSpec.getSpec().getUrn()));
     }
   }
 }
