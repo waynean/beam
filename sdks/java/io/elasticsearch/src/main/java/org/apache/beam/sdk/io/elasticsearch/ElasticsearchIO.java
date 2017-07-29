@@ -183,10 +183,8 @@ public class ElasticsearchIO {
      * @param index the index toward which the requests will be issued
      * @param type the document type toward which the requests will be issued
      * @return the connection configuration object
-     * @throws IOException when it fails to connect to Elasticsearch
      */
-    public static ConnectionConfiguration create(String[] addresses, String index, String type)
-        throws IOException {
+    public static ConnectionConfiguration create(String[] addresses, String index, String type){
       checkArgument(
           addresses != null,
           "ConnectionConfiguration.create(addresses, index, type) called with null address");
@@ -206,23 +204,7 @@ public class ElasticsearchIO {
               .setIndex(index)
               .setType(type)
               .build();
-      checkVersion(connectionConfiguration);
       return connectionConfiguration;
-    }
-
-    private static void checkVersion(ConnectionConfiguration connectionConfiguration)
-        throws IOException {
-      RestClient restClient = connectionConfiguration.createClient();
-      Response response = restClient.performRequest("GET", "", new BasicHeader("", ""));
-      JsonNode jsonNode = parseResponse(response);
-      String version = jsonNode.path("version").path("number").asText();
-      boolean version2x = version.startsWith("2.");
-      restClient.close();
-      checkArgument(
-          version2x,
-          "ConnectionConfiguration.create(addresses, index, type): "
-              + "the Elasticsearch version to connect to is different of 2.x. "
-              + "This version of the ElasticsearchIO is only compatible with Elasticsearch v2.x");
     }
 
     /**
@@ -398,16 +380,20 @@ public class ElasticsearchIO {
 
     @Override
     public void validate(PipelineOptions options) {
+      ConnectionConfiguration connectionConfiguration = getConnectionConfiguration();
       checkState(
-          getConnectionConfiguration() != null,
+          connectionConfiguration != null,
           "ElasticsearchIO.read() requires a connection configuration"
               + " to be set via withConnectionConfiguration(configuration)");
+      checkVersion(connectionConfiguration);
     }
 
     @Override
     public void populateDisplayData(DisplayData.Builder builder) {
       super.populateDisplayData(builder);
       builder.addIfNotNull(DisplayData.item("query", getQuery()));
+      builder.addIfNotNull(DisplayData.item("batchSize", getBatchSize()));
+      builder.addIfNotNull(DisplayData.item("scrollKeepalive", getScrollKeepalive()));
       getConnectionConfiguration().populateDisplayData(builder);
     }
   }
@@ -715,10 +701,12 @@ public class ElasticsearchIO {
 
     @Override
     public void validate(PipelineOptions options) {
+      ConnectionConfiguration connectionConfiguration = getConnectionConfiguration();
       checkState(
-          getConnectionConfiguration() != null,
+          connectionConfiguration != null,
           "ElasticsearchIO.write() requires a connection configuration"
               + " to be set via withConnectionConfiguration(configuration)");
+      checkVersion(connectionConfiguration);
     }
 
     @Override
@@ -826,6 +814,18 @@ public class ElasticsearchIO {
           restClient.close();
         }
       }
+    }
+  }
+  private static void checkVersion(ConnectionConfiguration connectionConfiguration){
+    try (RestClient restClient = connectionConfiguration.createClient()) {
+      Response response = restClient.performRequest("GET", "", new BasicHeader("", ""));
+      JsonNode jsonNode = parseResponse(response);
+      String version = jsonNode.path("version").path("number").asText();
+      boolean version2x = version.startsWith("2.");
+      checkArgument(version2x, "The Elasticsearch version to connect to is different of 2.x. "
+          + "This version of the ElasticsearchIO is only compatible with Elasticsearch v2.x");
+    } catch (IOException e) {
+      throw new IllegalArgumentException("Cannot check Elasticsearch version");
     }
   }
 }
