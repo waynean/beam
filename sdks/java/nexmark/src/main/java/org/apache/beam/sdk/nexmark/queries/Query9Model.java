@@ -15,25 +15,30 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.fn.harness.state;
+package org.apache.beam.sdk.nexmark.queries;
 
-import java.util.concurrent.CompletableFuture;
-import org.apache.beam.fn.v1.BeamFnApi;
-import org.apache.beam.fn.v1.BeamFnApi.StateResponse;
+import java.io.Serializable;
+import java.util.Collection;
+import java.util.Iterator;
+
+import org.apache.beam.sdk.nexmark.NexmarkConfiguration;
+import org.apache.beam.sdk.values.TimestampedValue;
 
 /**
- * The {@link BeamFnStateClient} is able to forward state requests to a handler which returns
- * a corresponding response or error if completed unsuccessfully.
+ * A direct implementation of {@link Query9}.
  */
-public interface BeamFnStateClient {
+public class Query9Model extends NexmarkQueryModel implements Serializable {
+  public Query9Model(NexmarkConfiguration configuration) {
+    super(configuration);
+  }
 
-  /**
-   * Consumes a state request populating a unique id returning a future to the response.
-   *
-   * @param requestBuilder A partially completed state request. The id will be populated the client.
-   * @param response A future containing a corresponding {@link StateResponse} for the supplied
-   * request.
-   */
-  void handle(BeamFnApi.StateRequest.Builder requestBuilder,
-      CompletableFuture<StateResponse> response);
+  @Override
+  public AbstractSimulator<?, ?> simulator() {
+    return new WinningBidsSimulator(configuration);
+  }
+
+  @Override
+  protected <T> Collection<String> toCollection(Iterator<TimestampedValue<T>> itr) {
+    return toValue(itr);
+  }
 }

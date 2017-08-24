@@ -15,25 +15,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.fn.harness.state;
-
-import java.util.concurrent.CompletableFuture;
-import org.apache.beam.fn.v1.BeamFnApi;
-import org.apache.beam.fn.v1.BeamFnApi.StateResponse;
 
 /**
- * The {@link BeamFnStateClient} is able to forward state requests to a handler which returns
- * a corresponding response or error if completed unsuccessfully.
+ * Nexmark Benchmark Model.
  */
-public interface BeamFnStateClient {
-
-  /**
-   * Consumes a state request populating a unique id returning a future to the response.
-   *
-   * @param requestBuilder A partially completed state request. The id will be populated the client.
-   * @param response A future containing a corresponding {@link StateResponse} for the supplied
-   * request.
-   */
-  void handle(BeamFnApi.StateRequest.Builder requestBuilder,
-      CompletableFuture<StateResponse> response);
-}
+package org.apache.beam.sdk.nexmark.model;
