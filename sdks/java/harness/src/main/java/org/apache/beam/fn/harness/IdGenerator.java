@@ -15,19 +15,19 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.sdk.io.kinesis;
+package org.apache.beam.fn.harness;
 
-import com.amazonaws.services.kinesis.AmazonKinesis;
-
-import java.io.Serializable;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Provides instances of {@link AmazonKinesis} interface.
+ * An id generator.
  *
- * <p>Please note, that any instance of {@link KinesisClientProvider} must be
- * {@link Serializable} to ensure it can be sent to worker machines.
+ * <p>This encapsulation exists to prevent usage of the wrong method on a shared {@link AtomicLong}.
  */
-public interface KinesisClientProvider extends Serializable {
+public final class IdGenerator {
+  private static final AtomicLong idGenerator = new AtomicLong(-1);
 
-  AmazonKinesis get();
+  public static String generate() {
+    return Long.toString(idGenerator.getAndDecrement());
+  }
 }

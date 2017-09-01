@@ -15,19 +15,26 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.sdk.io.kinesis;
+package org.apache.beam.fn.harness;
 
-import com.amazonaws.services.kinesis.AmazonKinesis;
+import static org.junit.Assert.assertEquals;
 
-import java.io.Serializable;
+import java.util.HashSet;
+import java.util.Set;
+import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.JUnit4;
 
-/**
- * Provides instances of {@link AmazonKinesis} interface.
- *
- * <p>Please note, that any instance of {@link KinesisClientProvider} must be
- * {@link Serializable} to ensure it can be sent to worker machines.
- */
-public interface KinesisClientProvider extends Serializable {
-
-  AmazonKinesis get();
+/** Tests for {@link IdGenerator}. */
+@RunWith(JUnit4.class)
+public class IdGeneratorTest {
+  @Test
+  public void testGenerationNeverMatches() {
+    final int numToGenerate = 10000;
+    Set<String> generatedValues = new HashSet<>();
+    for (int i = 0; i < numToGenerate; ++i) {
+      generatedValues.add(IdGenerator.generate());
+    }
+    assertEquals(numToGenerate, generatedValues.size());
+  }
 }

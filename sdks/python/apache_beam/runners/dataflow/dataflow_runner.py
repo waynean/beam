@@ -40,7 +40,6 @@ from apache_beam.runners.dataflow.internal import names
 from apache_beam.runners.dataflow.internal.clients import dataflow as dataflow_api
 from apache_beam.runners.dataflow.internal.names import PropertyNames
 from apache_beam.runners.dataflow.internal.names import TransformNames
-from apache_beam.runners.dataflow.ptransform_overrides import CreatePTransformOverride
 from apache_beam.runners.runner import PValueCache
 from apache_beam.runners.runner import PipelineResult
 from apache_beam.runners.runner import PipelineRunner
@@ -72,6 +71,11 @@ class DataflowRunner(PipelineRunner):
   # not change.
   # For internal SDK use only. This should not be updated by Beam pipeline
   # authors.
+
+  # Imported here to avoid circular dependencies.
+  # TODO: Remove the apache_beam.pipeline dependency in CreatePTransformOverride
+  from apache_beam.runners.dataflow.ptransform_overrides import CreatePTransformOverride
+
   _PTRANSFORM_OVERRIDES = [
       CreatePTransformOverride(),
   ]
@@ -949,7 +953,9 @@ class DataflowPipelineResult(PipelineResult):
       while thread.isAlive():
         time.sleep(5.0)
 
-      terminated = self._is_in_terminal_state()
+      # TODO: Merge the termination code in poll_for_job_completion and
+      # _is_in_terminal_state.
+      terminated = (str(self._job.currentState) != 'JOB_STATE_RUNNING')
       assert duration or terminated, (
           'Job did not reach to a terminal state after waiting indefinitely.')
 
