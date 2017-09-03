@@ -27,6 +27,9 @@ import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Predicates;
 import com.google.common.collect.Iterables;
 import com.google.common.collect.Lists;
+
+import java.nio.ByteBuffer;
+import java.util.Arrays;
 import java.util.List;
 import javax.annotation.Nullable;
 import org.apache.beam.sdk.annotations.Experimental;
@@ -63,7 +66,8 @@ import org.joda.time.Duration;
  * PCollection}, apply {@link TextIO#readAll()}.
  *
  * <p>{@link #read} returns a {@link PCollection} of {@link String Strings}, each corresponding to
- * one line of an input UTF-8 text file (split into lines delimited by '\n', '\r', or '\r\n').
+ * one line of an input UTF-8 text file (split into lines delimited by '\n', '\r', or '\r\n',
+ * or specified delimiter see {@link TextIO.Read#withDelimiter}).
  *
  * <h3>Filepattern expansion and watching</h3>
  *
@@ -238,8 +242,8 @@ public class TextIO {
    * DynamicDestinations} object, set via {@link Write#to(DynamicDestinations)} to examine the
    * custom type when choosing a destination.
    */
-  public static <UserT> TypedWrite<UserT> writeCustomType() {
-    return new AutoValue_TextIO_TypedWrite.Builder<UserT>()
+  public static <UserT> TypedWrite<UserT, Void> writeCustomType() {
+    return new AutoValue_TextIO_TypedWrite.Builder<UserT, Void>()
         .setFilenamePrefix(null)
         .setTempDirectory(null)
         .setShardTemplate(null)
@@ -255,7 +259,8 @@ public class TextIO {
   /** Implementation of {@link #read}. */
   @AutoValue
   public abstract static class Read extends PTransform<PBegin, PCollection<String>> {
-    @Nullable abstract ValueProvider<String> getFilepattern();
+    @Nullable
+    abstract ValueProvider<String> getFilepattern();
     abstract Compression getCompression();
 
     @Nullable
@@ -266,6 +271,8 @@ public class TextIO {
 
     abstract boolean getHintMatchesManyFiles();
     abstract EmptyMatchTreatment getEmptyMatchTreatment();
+    @Nullable
+    abstract byte[] getDelimiter();
 
     abstract Builder toBuilder();
 
@@ -278,6 +285,7 @@ public class TextIO {
               TerminationCondition<?, ?> condition);
       abstract Builder setHintMatchesManyFiles(boolean hintManyFiles);
       abstract Builder setEmptyMatchTreatment(EmptyMatchTreatment treatment);
+      abstract Builder setDelimiter(byte[] delimiter);
 
       abstract Read build();
     }
@@ -360,6 +368,25 @@ public class TextIO {
       return toBuilder().setEmptyMatchTreatment(treatment).build();
     }
 
+    /**
+     * Set the custom delimiter to be used in place of the default ones ('\r', '\n' or '\r\n').
+     */
+    public Read withDelimiter(byte[] delimiter) {
+      checkArgument(delimiter != null, "delimiter can not be null");
+      checkArgument(!isSelfOverlapping(delimiter), "delimiter must not self-overlap");
+      return toBuilder().setDelimiter(delimiter).build();
+    }
+
+    static boolean isSelfOverlapping(byte[] s) {
+      // s self-overlaps if v exists such as s = vu = wv with u and w non empty
+      for (int i = 1; i < s.length - 1; ++i) {
+        if (ByteBuffer.wrap(s, 0, i).equals(ByteBuffer.wrap(s, s.length - i, i))) {
+          return true;
+        }
+      }
+      return false;
+    }
+
     @Override
     public PCollection<String> expand(PBegin input) {
       checkNotNull(getFilepattern(), "need to set the filepattern of a TextIO.Read transform");
@@ -370,7 +397,8 @@ public class TextIO {
       ReadAll readAll =
           readAll()
               .withCompression(getCompression())
-              .withEmptyMatchTreatment(getEmptyMatchTreatment());
+              .withEmptyMatchTreatment(getEmptyMatchTreatment())
+              .withDelimiter(getDelimiter());
       if (getWatchForNewFilesInterval() != null) {
         TerminationCondition<String, ?> readAllCondition =
             ignoreInput(getWatchForNewFilesTerminationCondition());
@@ -383,7 +411,8 @@ public class TextIO {
 
     // Helper to create a source specific to the requested compression type.
     protected FileBasedSource<String> getSource() {
-      return CompressedSource.from(new TextSource(getFilepattern(), getEmptyMatchTreatment()))
+      return CompressedSource
+          .from(new TextSource(getFilepattern(), getEmptyMatchTreatment(), getDelimiter()))
           .withCompression(getCompression());
     }
 
@@ -401,7 +430,11 @@ public class TextIO {
                   .withLabel("Treatment of filepatterns that match no files"))
           .addIfNotNull(
               DisplayData.item("watchForNewFilesInterval", getWatchForNewFilesInterval())
-                  .withLabel("Interval to watch for new files"));
+                  .withLabel("Interval to watch for new files"))
+          .addIfNotNull(
+              DisplayData.item("delimiter", Arrays.toString(getDelimiter()))
+              .withLabel("Custom delimiter to split records"));
+
     }
   }
 
@@ -421,6 +454,8 @@ public class TextIO {
 
     abstract EmptyMatchTreatment getEmptyMatchTreatment();
     abstract long getDesiredBundleSizeBytes();
+    @Nullable
+    abstract byte[] getDelimiter();
 
     abstract Builder toBuilder();
 
@@ -432,7 +467,7 @@ public class TextIO {
           TerminationCondition<String, ?> condition);
       abstract Builder setEmptyMatchTreatment(EmptyMatchTreatment treatment);
       abstract Builder setDesiredBundleSizeBytes(long desiredBundleSizeBytes);
-
+      abstract Builder setDelimiter(byte[] delimiter);
       abstract ReadAll build();
     }
 
@@ -471,6 +506,10 @@ public class TextIO {
       return toBuilder().setDesiredBundleSizeBytes(desiredBundleSizeBytes).build();
     }
 
+    ReadAll withDelimiter(byte[] delimiter) {
+      return toBuilder().setDelimiter(delimiter).build();
+    }
+
     @Override
     public PCollection<String> expand(PCollection<String> input) {
       Match.Filepatterns matchFilepatterns =
@@ -487,34 +526,40 @@ public class TextIO {
               new ReadAllViaFileBasedSource<>(
                   new IsSplittableFn(getCompression()),
                   getDesiredBundleSizeBytes(),
-                  new CreateTextSourceFn(getCompression(), getEmptyMatchTreatment())))
-          .setCoder(StringUtf8Coder.of());
+                  new CreateTextSourceFn(getCompression(), getEmptyMatchTreatment(),
+                      getDelimiter()))).setCoder(StringUtf8Coder.of());
     }
 
     @Override
     public void populateDisplayData(DisplayData.Builder builder) {
       super.populateDisplayData(builder);
 
-      builder.add(
+      builder
+          .add(
           DisplayData.item("compressionType", getCompression().toString())
-              .withLabel("Compression Type"));
+              .withLabel("Compression Type"))
+          .addIfNotNull(
+          DisplayData.item("delimiter", Arrays.toString(getDelimiter()))
+              .withLabel("Custom delimiter to split records"));
     }
 
     private static class CreateTextSourceFn
         implements SerializableFunction<String, FileBasedSource<String>> {
       private final Compression compression;
       private final EmptyMatchTreatment emptyMatchTreatment;
+      private byte[] delimiter;
 
       private CreateTextSourceFn(
-          Compression compression, EmptyMatchTreatment emptyMatchTreatment) {
+          Compression compression, EmptyMatchTreatment emptyMatchTreatment, byte[] delimiter) {
         this.compression = compression;
         this.emptyMatchTreatment = emptyMatchTreatment;
+        this.delimiter = delimiter;
       }
 
       @Override
       public FileBasedSource<String> apply(String input) {
         return CompressedSource.from(
-                new TextSource(StaticValueProvider.of(input), emptyMatchTreatment))
+                new TextSource(StaticValueProvider.of(input), emptyMatchTreatment, delimiter))
             .withCompression(compression);
       }
     }
@@ -537,7 +582,8 @@ public class TextIO {
 
   /** Implementation of {@link #write}. */
   @AutoValue
-  public abstract static class TypedWrite<UserT> extends PTransform<PCollection<UserT>, PDone> {
+  public abstract static class TypedWrite<UserT, DestinationT>
+      extends PTransform<PCollection<UserT>, WriteFilesResult<DestinationT>> {
     /** The prefix of each file written, combined with suffix and shardTemplate. */
     @Nullable abstract ValueProvider<ResourceId> getFilenamePrefix();
 
@@ -565,14 +611,14 @@ public class TextIO {
 
     /** Allows for value-dependent {@link DynamicDestinations} to be vended. */
     @Nullable
-    abstract DynamicDestinations<UserT, ?, String> getDynamicDestinations();
+    abstract DynamicDestinations<UserT, DestinationT, String> getDynamicDestinations();
 
+    /** A destination function for using {@link DefaultFilenamePolicy}. */
     @Nullable
-    /** A destination function for using {@link DefaultFilenamePolicy} */
     abstract SerializableFunction<UserT, Params> getDestinationFunction();
 
-    @Nullable
     /** A default destination for empty PCollections. */
+    @Nullable
     abstract Params getEmptyDestination();
 
     /** A function that converts UserT to a String, for writing to the file. */
@@ -588,42 +634,46 @@ public class TextIO {
      */
     abstract WritableByteChannelFactory getWritableByteChannelFactory();
 
-    abstract Builder<UserT> toBuilder();
+    abstract Builder<UserT, DestinationT> toBuilder();
 
     @AutoValue.Builder
-    abstract static class Builder<UserT> {
-      abstract Builder<UserT> setFilenamePrefix(ValueProvider<ResourceId> filenamePrefix);
+    abstract static class Builder<UserT, DestinationT> {
+      abstract Builder<UserT, DestinationT> setFilenamePrefix(
+          ValueProvider<ResourceId> filenamePrefix);
 
-      abstract Builder<UserT> setTempDirectory(ValueProvider<ResourceId> tempDirectory);
+      abstract Builder<UserT, DestinationT> setTempDirectory(
+          ValueProvider<ResourceId> tempDirectory);
 
-      abstract Builder<UserT> setShardTemplate(@Nullable String shardTemplate);
+      abstract Builder<UserT, DestinationT> setShardTemplate(@Nullable String shardTemplate);
 
-      abstract Builder<UserT> setFilenameSuffix(@Nullable String filenameSuffix);
+      abstract Builder<UserT, DestinationT> setFilenameSuffix(@Nullable String filenameSuffix);
 
-      abstract Builder<UserT> setHeader(@Nullable String header);
+      abstract Builder<UserT, DestinationT> setHeader(@Nullable String header);
 
-      abstract Builder<UserT> setFooter(@Nullable String footer);
+      abstract Builder<UserT, DestinationT> setFooter(@Nullable String footer);
 
-      abstract Builder<UserT> setFilenamePolicy(@Nullable FilenamePolicy filenamePolicy);
+      abstract Builder<UserT, DestinationT> setFilenamePolicy(
+          @Nullable FilenamePolicy filenamePolicy);
 
-      abstract Builder<UserT> setDynamicDestinations(
-          @Nullable DynamicDestinations<UserT, ?, String> dynamicDestinations);
+      abstract Builder<UserT, DestinationT> setDynamicDestinations(
+          @Nullable DynamicDestinations<UserT, DestinationT, String> dynamicDestinations);
 
-      abstract Builder<UserT> setDestinationFunction(
+      abstract Builder<UserT, DestinationT> setDestinationFunction(
           @Nullable SerializableFunction<UserT, Params> destinationFunction);
 
-      abstract Builder<UserT> setEmptyDestination(Params emptyDestination);
+      abstract Builder<UserT, DestinationT> setEmptyDestination(Params emptyDestination);
 
-      abstract Builder<UserT> setFormatFunction(SerializableFunction<UserT, String> formatFunction);
+      abstract Builder<UserT, DestinationT> setFormatFunction(
+          SerializableFunction<UserT, String> formatFunction);
 
-      abstract Builder<UserT> setNumShards(int numShards);
+      abstract Builder<UserT, DestinationT> setNumShards(int numShards);
 
-      abstract Builder<UserT> setWindowedWrites(boolean windowedWrites);
+      abstract Builder<UserT, DestinationT> setWindowedWrites(boolean windowedWrites);
 
-      abstract Builder<UserT> setWritableByteChannelFactory(
+      abstract Builder<UserT, DestinationT> setWritableByteChannelFactory(
           WritableByteChannelFactory writableByteChannelFactory);
 
-      abstract TypedWrite<UserT> build();
+      abstract TypedWrite<UserT, DestinationT> build();
     }
 
     /**
@@ -643,18 +693,18 @@ public class TextIO {
      * <p>If {@link #withTempDirectory} has not been called, this filename prefix will be used to
      * infer a directory for temporary files.
      */
-    public TypedWrite<UserT> to(String filenamePrefix) {
+    public TypedWrite<UserT, DestinationT> to(String filenamePrefix) {
       return to(FileBasedSink.convertToFileResourceIfPossible(filenamePrefix));
     }
 
     /** Like {@link #to(String)}. */
     @Experimental(Kind.FILESYSTEM)
-    public TypedWrite<UserT> to(ResourceId filenamePrefix) {
+    public TypedWrite<UserT, DestinationT> to(ResourceId filenamePrefix) {
       return toResource(StaticValueProvider.of(filenamePrefix));
     }
 
     /** Like {@link #to(String)}. */
-    public TypedWrite<UserT> to(ValueProvider<String> outputPrefix) {
+    public TypedWrite<UserT, DestinationT> to(ValueProvider<String> outputPrefix) {
       return toResource(NestedValueProvider.of(outputPrefix,
           new SerializableFunction<String, ResourceId>() {
             @Override
@@ -668,7 +718,7 @@ public class TextIO {
      * Writes to files named according to the given {@link FileBasedSink.FilenamePolicy}. A
      * directory for temporary files must be specified using {@link #withTempDirectory}.
      */
-    public TypedWrite<UserT> to(FilenamePolicy filenamePolicy) {
+    public TypedWrite<UserT, DestinationT> to(FilenamePolicy filenamePolicy) {
       return toBuilder().setFilenamePolicy(filenamePolicy).build();
     }
 
@@ -677,8 +727,9 @@ public class TextIO {
      * objects can examine the input record when creating a {@link FilenamePolicy}. A directory for
      * temporary files must be specified using {@link #withTempDirectory}.
      */
-    public TypedWrite<UserT> to(DynamicDestinations<UserT, ?, String> dynamicDestinations) {
-      return toBuilder().setDynamicDestinations(dynamicDestinations).build();
+    public <NewDestinationT> TypedWrite<UserT, NewDestinationT> to(
+        DynamicDestinations<UserT, DestinationT, String> dynamicDestinations) {
+      return (TypedWrite) toBuilder().setDynamicDestinations(dynamicDestinations).build();
     }
 
     /**
@@ -688,9 +739,9 @@ public class TextIO {
      * emptyDestination parameter specified where empty files should be written for when the written
      * {@link PCollection} is empty.
      */
-    public TypedWrite<UserT> to(
+    public TypedWrite<UserT, Params> to(
         SerializableFunction<UserT, Params> destinationFunction, Params emptyDestination) {
-      return toBuilder()
+      return (TypedWrite) toBuilder()
           .setDestinationFunction(destinationFunction)
           .setEmptyDestination(emptyDestination)
           .build();
@@ -698,7 +749,7 @@ public class TextIO {
 
     /** Like {@link #to(ResourceId)}. */
     @Experimental(Kind.FILESYSTEM)
-    public TypedWrite<UserT> toResource(ValueProvider<ResourceId> filenamePrefix) {
+    public TypedWrite<UserT, DestinationT> toResource(ValueProvider<ResourceId> filenamePrefix) {
       return toBuilder().setFilenamePrefix(filenamePrefix).build();
     }
 
@@ -707,20 +758,21 @@ public class TextIO {
      * #to(DynamicDestinations)} is used, {@link DynamicDestinations#formatRecord(Object)} must be
      * used instead.
      */
-    public TypedWrite<UserT> withFormatFunction(
+    public TypedWrite<UserT, DestinationT> withFormatFunction(
         SerializableFunction<UserT, String> formatFunction) {
       return toBuilder().setFormatFunction(formatFunction).build();
     }
 
     /** Set the base directory used to generate temporary files. */
     @Experimental(Kind.FILESYSTEM)
-    public TypedWrite<UserT> withTempDirectory(ValueProvider<ResourceId> tempDirectory) {
+    public TypedWrite<UserT, DestinationT> withTempDirectory(
+        ValueProvider<ResourceId> tempDirectory) {
       return toBuilder().setTempDirectory(tempDirectory).build();
     }
 
     /** Set the base directory used to generate temporary files. */
     @Experimental(Kind.FILESYSTEM)
-    public TypedWrite<UserT> withTempDirectory(ResourceId tempDirectory) {
+    public TypedWrite<UserT, DestinationT> withTempDirectory(ResourceId tempDirectory) {
       return withTempDirectory(StaticValueProvider.of(tempDirectory));
     }
 
@@ -732,7 +784,7 @@ public class TextIO {
      * <p>See {@link DefaultFilenamePolicy} for how the prefix, shard name template, and suffix are
      * used.
      */
-    public TypedWrite<UserT> withShardNameTemplate(String shardTemplate) {
+    public TypedWrite<UserT, DestinationT> withShardNameTemplate(String shardTemplate) {
       return toBuilder().setShardTemplate(shardTemplate).build();
     }
 
@@ -744,7 +796,7 @@ public class TextIO {
      * <p>See {@link DefaultFilenamePolicy} for how the prefix, shard name template, and suffix are
      * used.
      */
-    public TypedWrite<UserT> withSuffix(String filenameSuffix) {
+    public TypedWrite<UserT, DestinationT> withSuffix(String filenameSuffix) {
       return toBuilder().setFilenameSuffix(filenameSuffix).build();
     }
 
@@ -758,7 +810,7 @@ public class TextIO {
      *
      * @param numShards the number of shards to use, or 0 to let the system decide.
      */
-    public TypedWrite<UserT> withNumShards(int numShards) {
+    public TypedWrite<UserT, DestinationT> withNumShards(int numShards) {
       checkArgument(numShards >= 0);
       return toBuilder().setNumShards(numShards).build();
     }
@@ -772,7 +824,7 @@ public class TextIO {
      *
      * <p>This is equivalent to {@code .withNumShards(1).withShardNameTemplate("")}
      */
-    public TypedWrite<UserT> withoutSharding() {
+    public TypedWrite<UserT, DestinationT> withoutSharding() {
       return withNumShards(1).withShardNameTemplate("");
     }
 
@@ -781,7 +833,7 @@ public class TextIO {
      *
      * <p>A {@code null} value will clear any previously configured header.
      */
-    public TypedWrite<UserT> withHeader(@Nullable String header) {
+    public TypedWrite<UserT, DestinationT> withHeader(@Nullable String header) {
       return toBuilder().setHeader(header).build();
     }
 
@@ -790,7 +842,7 @@ public class TextIO {
      *
      * <p>A {@code null} value will clear any previously configured footer.
      */
-    public TypedWrite<UserT> withFooter(@Nullable String footer) {
+    public TypedWrite<UserT, DestinationT> withFooter(@Nullable String footer) {
       return toBuilder().setFooter(footer).build();
     }
 
@@ -801,7 +853,7 @@ public class TextIO {
      *
      * <p>A {@code null} value will reset the value to the default value mentioned above.
      */
-    public TypedWrite<UserT> withWritableByteChannelFactory(
+    public TypedWrite<UserT, DestinationT> withWritableByteChannelFactory(
         WritableByteChannelFactory writableByteChannelFactory) {
       return toBuilder().setWritableByteChannelFactory(writableByteChannelFactory).build();
     }
@@ -810,7 +862,7 @@ public class TextIO {
      * Returns a transform for writing to text files like this one but that compresses output using
      * the given {@link Compression}. The default value is {@link Compression#UNCOMPRESSED}.
      */
-    public TypedWrite<UserT> withCompression(Compression compression) {
+    public TypedWrite<UserT, DestinationT> withCompression(Compression compression) {
       checkArgument(compression != null, "compression can not be null");
       return withWritableByteChannelFactory(
           FileBasedSink.CompressionType.fromCanonical(compression));
@@ -822,18 +874,22 @@ public class TextIO {
      * <p>If using {@link #to(FileBasedSink.FilenamePolicy)}. Filenames will be generated using
      * {@link FilenamePolicy#windowedFilename}. See also {@link WriteFiles#withWindowedWrites()}.
      */
-    public TypedWrite<UserT> withWindowedWrites() {
+    public TypedWrite<UserT, DestinationT> withWindowedWrites() {
       return toBuilder().setWindowedWrites(true).build();
     }
 
-    private DynamicDestinations<UserT, ?, String> resolveDynamicDestinations() {
-      DynamicDestinations<UserT, ?, String> dynamicDestinations = getDynamicDestinations();
+    private DynamicDestinations<UserT, DestinationT, String> resolveDynamicDestinations() {
+      DynamicDestinations<UserT, DestinationT, String> dynamicDestinations =
+          getDynamicDestinations();
       if (dynamicDestinations == null) {
         if (getDestinationFunction() != null) {
+          // In this case, DestinationT == Params
           dynamicDestinations =
-              DynamicFileDestinations.toDefaultPolicies(
-                  getDestinationFunction(), getEmptyDestination(), getFormatFunction());
+              (DynamicDestinations)
+                  DynamicFileDestinations.toDefaultPolicies(
+                      getDestinationFunction(), getEmptyDestination(), getFormatFunction());
         } else {
+          // In this case, DestinationT == Void
           FilenamePolicy usedFilenamePolicy = getFilenamePolicy();
           if (usedFilenamePolicy == null) {
             usedFilenamePolicy =
@@ -844,14 +900,15 @@ public class TextIO {
                     getWindowedWrites());
           }
           dynamicDestinations =
-              DynamicFileDestinations.constant(usedFilenamePolicy, getFormatFunction());
+              (DynamicDestinations)
+                  DynamicFileDestinations.constant(usedFilenamePolicy, getFormatFunction());
         }
       }
       return dynamicDestinations;
     }
 
     @Override
-    public PDone expand(PCollection<UserT> input) {
+    public WriteFilesResult<DestinationT> expand(PCollection<UserT> input) {
       checkState(
           getFilenamePrefix() != null || getTempDirectory() != null,
           "Need to set either the filename prefix or the tempDirectory of a TextIO.Write "
@@ -880,12 +937,6 @@ public class TextIO {
             "shardTemplate and filenameSuffix should only be used with the default "
                 + "filename policy");
       }
-      return expandTyped(input, resolveDynamicDestinations());
-    }
-
-    public <DestinationT> PDone expandTyped(
-        PCollection<UserT> input,
-        DynamicDestinations<UserT, DestinationT, String> dynamicDestinations) {
       ValueProvider<ResourceId> tempDirectory = getTempDirectory();
       if (tempDirectory == null) {
         tempDirectory = getFilenamePrefix();
@@ -894,7 +945,7 @@ public class TextIO {
           WriteFiles.to(
               new TextSink<>(
                   tempDirectory,
-                  dynamicDestinations,
+                  resolveDynamicDestinations(),
                   getHeader(),
                   getFooter(),
                   getWritableByteChannelFactory()));
@@ -934,13 +985,13 @@ public class TextIO {
    * This class exists for backwards compatibility, and will be removed in Beam 3.0.
    */
   public static class Write extends PTransform<PCollection<String>, PDone> {
-    @VisibleForTesting TypedWrite<String> inner;
+    @VisibleForTesting TypedWrite<String, ?> inner;
 
     Write() {
       this(TextIO.<String>writeCustomType());
     }
 
-    Write(TypedWrite<String> inner) {
+    Write(TypedWrite<String, ?> inner) {
       this.inner = inner;
     }
 
@@ -982,7 +1033,8 @@ public class TextIO {
     /** See {@link TypedWrite#to(DynamicDestinations)}. */
     @Experimental(Kind.FILESYSTEM)
     public Write to(DynamicDestinations<String, ?, String> dynamicDestinations) {
-      return new Write(inner.to(dynamicDestinations).withFormatFunction(null));
+      return new Write(
+          inner.to((DynamicDestinations) dynamicDestinations).withFormatFunction(null));
     }
 
     /** See {@link TypedWrite#to(SerializableFunction, Params)}. */
@@ -1048,6 +1100,22 @@ public class TextIO {
       return new Write(inner.withWindowedWrites());
     }
 
+    /**
+     * Specify that output filenames are wanted.
+     *
+     * <p>The nested {@link TypedWrite}transform always has access to output filenames, however due
+     * to backwards-compatibility concerns, {@link Write} cannot return them. This method simply
+     * returns the inner {@link TypedWrite} transform which has {@link WriteFilesResult} as its
+     * output type, allowing access to output files.
+     *
+     * <p>The supplied {@code DestinationT} type must be: the same as that supplied in {@link
+     * #to(DynamicDestinations)} if that method was used; {@link Params} if {@link
+     * #to(SerializableFunction, Params)} was used, or {@code Void} otherwise.
+     */
+    public <DestinationT> TypedWrite<String, DestinationT> withOutputFilenames() {
+      return (TypedWrite) inner;
+    }
+
     @Override
     public void populateDisplayData(DisplayData.Builder builder) {
       inner.populateDisplayData(builder);
@@ -1055,7 +1123,8 @@ public class TextIO {
 
     @Override
     public PDone expand(PCollection<String> input) {
-      return inner.expand(input);
+      inner.expand(input);
+      return PDone.in(input.getPipeline());
     }
   }
 
