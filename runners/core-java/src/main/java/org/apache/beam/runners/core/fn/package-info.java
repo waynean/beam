@@ -15,16 +15,8 @@
  * See the License for the specific language governing permissions and
  * limitations under the License.
  */
-package org.apache.beam.sdk.io.kinesis;
-
-import com.amazonaws.AmazonClientException;
 
 /**
- * A transient exception thrown by Kinesis.
+ * Provides utilities for a Beam runner to interact with a client using the Fn API.
  */
-class TransientKinesisException extends Exception {
-
-  public TransientKinesisException(String s, AmazonClientException e) {
-    super(s, e);
-  }
-}
+package org.apache.beam.runners.core.fn;
