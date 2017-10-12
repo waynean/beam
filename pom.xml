@@ -34,7 +34,7 @@
   <url>http://beam.apache.org/</url>
   <inceptionYear>2016</inceptionYear>
 
-  <version>2.2.0-SNAPSHOT</version>
+  <version>2.3.0-SNAPSHOT</version>
 
   <licenses>
     <license>
@@ -191,6 +191,7 @@
     <!-- sdks/java/build-tools has project-wide configuration. To make these available
       in all modules, link it directly to the parent pom.xml. -->
     <module>sdks/java/build-tools</module>
+    <module>model</module>
     <module>sdks</module>
     <module>runners</module>
     <module>examples</module>
@@ -402,21 +403,27 @@
     <dependencies>
       <dependency>
         <groupId>org.apache.beam</groupId>
-        <artifactId>beam-sdks-common-fn-api</artifactId>
+        <artifactId>beam-model-pipeline</artifactId>
         <version>${project.version}</version>
       </dependency>
 
       <dependency>
         <groupId>org.apache.beam</groupId>
-        <artifactId>beam-sdks-common-fn-api</artifactId>
+        <artifactId>beam-model-job-management</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-model-fn-execution</artifactId>
+        <version>${project.version}</version>
+      </dependency>
+
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-model-fn-execution</artifactId>
         <version>${project.version}</version>
         <type>test-jar</type>
-      </dependency>
-
-      <dependency>
-        <groupId>org.apache.beam</groupId>
-        <artifactId>beam-sdks-common-runner-api</artifactId>
-        <version>${project.version}</version>
       </dependency>
 
       <dependency>
@@ -617,6 +624,12 @@
         <artifactId>beam-runners-core-java</artifactId>
         <version>${project.version}</version>
         <type>test-jar</type>
+      </dependency>
+
+      <dependency>
+        <groupId>org.apache.beam</groupId>
+        <artifactId>beam-runners-reference-job-orchestrator</artifactId>
+        <version>${project.version}</version>
       </dependency>
 
       <dependency>
