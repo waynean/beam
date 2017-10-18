@@ -396,10 +396,9 @@ public class AutoComplete {
       List<Value> candidates = new ArrayList<>();
       Map<String, Value> properties = new HashMap<>();
       for (CompletionCandidate tag : c.element().getValue()) {
-        Entity.Builder tagEntity = Entity.newBuilder();
         properties.put("tag", makeValue(tag.value).build());
         properties.put("count", makeValue(tag.count).build());
-        candidates.add(makeValue(tagEntity).build());
+        candidates.add(makeValue(tag.value).build());
       }
       properties.put("candidates", makeValue(candidates).build());
       entityBuilder.putAllProperties(properties);
